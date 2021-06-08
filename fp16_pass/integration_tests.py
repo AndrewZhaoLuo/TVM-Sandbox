@@ -1,5 +1,6 @@
 import tempfile
 from collections import defaultdict
+from os import path
 from typing import *
 
 import numpy as np
@@ -13,6 +14,8 @@ from tvm.relay.op.tensor import exp
 from tvm.relay.testing import densenet, lstm, mobilenet, resnet, resnet_3d, squeezenet
 from tvm.relay.transform import AMPRewrite
 from tvm.relay.transform.transform import AnnotateSpans, InferType
+
+MODELS_DIR = "./models/"
 
 
 def run_module(mod, mod_params):
@@ -86,7 +89,7 @@ def test_squeezenet():
 
 # Straight image classification models
 def test_onnx_resnet18():
-    model_path = "/Users/andrewzhaoluo/Downloads/resnet18-v1-7.onnx"
+    model_path = path.join(MODELS_DIR, "resnet18-v1-7.onnx")
     # now you have super_resolution.onnx on disk
     onnx_model = onnx.load(model_path)
     mod, mod_params = relay.frontend.from_onnx(onnx_model)
@@ -98,7 +101,7 @@ def test_onnx_resnet18():
 
 
 def test_onnx_efficientnet():
-    model_path = "/Users/andrewzhaoluo/Downloads/efficientnet-lite4-11.onnx"
+    model_path = path.join(MODELS_DIR, "efficientnet-lite4-11.onnx")
     # now you have super_resolution.onnx on disk
     onnx_model = onnx.load(model_path)
     mod, mod_params = relay.frontend.from_onnx(onnx_model)
@@ -110,7 +113,7 @@ def test_onnx_efficientnet():
 
 
 def test_onnx_densenet():
-    model_path = "/Users/andrewzhaoluo/Downloads/densenet-3.onnx"
+    model_path = path.join(MODELS_DIR, "densenet-3.onnx")
     # now you have super_resolution.onnx on disk
     onnx_model = onnx.load(model_path)
     mod, mod_params = relay.frontend.from_onnx(onnx_model)
@@ -122,7 +125,7 @@ def test_onnx_densenet():
 
 
 def test_onnx_inceptionv3():
-    model_path = "/Users/andrewzhaoluo/Downloads/inceptionv3.onnx"
+    model_path = path.join(MODELS_DIR, "inceptionv3.onnx")
     onnx_model = onnx.load(model_path)
     mod, mod_params = relay.frontend.from_onnx(
         onnx_model, shape={"input.1": [1, 3, 299, 299]}
@@ -136,7 +139,7 @@ def test_onnx_inceptionv3():
 
 # Object detection models
 def test_onnx_tinyyolo2():
-    model_path = "/Users/andrewzhaoluo/Downloads/tinyyolov2-7.onnx"
+    model_path = path.join(MODELS_DIR, "tinyyolov2-7.onnx")
     onnx_model = onnx.load(model_path)
     mod, mod_params = relay.frontend.from_onnx(
         onnx_model, shape={"image": [1, 3, 416, 416]}
@@ -149,7 +152,7 @@ def test_onnx_tinyyolo2():
 
 
 def test_onnx_yolo2():
-    model_path = "/Users/andrewzhaoluo/Downloads/yolov2-coco-9.onnx"
+    model_path = path.join(MODELS_DIR, "yolov2-coco-9.onnx")
     onnx_model = onnx.load(model_path)
     mod, mod_params = relay.frontend.from_onnx(
         onnx_model, shape={"input.1": [1, 3, 416, 416]}
@@ -163,7 +166,7 @@ def test_onnx_yolo2():
 
 # Face recognition / embedding
 def test_onnx_arcfaceresnet():
-    model_path = "/Users/andrewzhaoluo/Downloads/arcfaceresnet100-8.onnx"
+    model_path = path.join(MODELS_DIR, "arcfaceresnet100-8.onnx")
     onnx_model = onnx.load(model_path)
     mod, mod_params = relay.frontend.from_onnx(onnx_model)
     mod_params["data"] = np.random.uniform(0, 1, size=[1, 3, 112, 112]).astype(
@@ -174,7 +177,7 @@ def test_onnx_arcfaceresnet():
 
 
 def test_onnx_rfb():
-    model_path = "/Users/andrewzhaoluo/Downloads/version-RFB-320.onnx"
+    model_path = path.join(MODELS_DIR, "version-RFB-320.onnx")
     onnx_model = onnx.load(model_path)
     mod, mod_params = relay.frontend.from_onnx(onnx_model)
     mod_params["input"] = np.random.uniform(0, 1, size=[1, 3, 240, 320]).astype(
@@ -186,7 +189,7 @@ def test_onnx_rfb():
 
 # Super resolution
 def test_onnx_superresolution():
-    model_path = "/Users/andrewzhaoluo/Downloads/super-resolution-10.onnx"
+    model_path = path.join(MODELS_DIR, "super-resolution-10.onnx")
     onnx_model = onnx.load(model_path)
     mod, mod_params = relay.frontend.from_onnx(
         onnx_model, shape={"input": [1, 1, 224, 224]}
@@ -200,7 +203,7 @@ def test_onnx_superresolution():
 
 # NLP models (ruh roh!)
 def test_onnx_gpt2():
-    model_path = "/Users/andrewzhaoluo/Downloads/gpt2-10.onnx"
+    model_path = path.join(MODELS_DIR, "gpt2-10.onnx")
     onnx_model = onnx.load(model_path)
 
     mod, mod_params = relay.frontend.from_onnx(onnx_model, shape={"input1": [1, 1, 1]})
@@ -210,7 +213,7 @@ def test_onnx_gpt2():
 
 
 def test_onnx_distillbert():
-    model_path = "/Users/andrewzhaoluo/Downloads/distilbert.onnx"
+    model_path = path.join(MODELS_DIR, "distilbert.onnx")
     onnx_model = onnx.load(model_path)
 
     mod, mod_params = relay.frontend.from_onnx(onnx_model, shape={"input.1": [10, 100]})
@@ -220,10 +223,10 @@ def test_onnx_distillbert():
 
 
 def test_pb_bert():
-    tvmc_model = tvmc.load("./models/bert-base-uncased.pb")
+    tvmc_model = tvmc.load(path.join(MODELS_DIR, "bert-base-uncased.pb"))
     mod, mod_params = tvmc_model.mod, tvmc_model.params
     # Weird functions we don't use are in there it's weird
     mod = tvm.IRModule.from_expr(mod["main"])
-    mod_params["x"] = np.random.randint(0, 100, size=[1, 128]).astype('int32')
+    mod_params["x"] = np.random.randint(0, 100, size=[1, 128]).astype("int32")
     output_mod = verify_fp32_fp16_output_close(mod, mod_params, atol=0.05, rtol=0.01)
     assert not tvm.ir.structural_equal(mod, output_mod)
