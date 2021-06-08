@@ -15,17 +15,19 @@
 # specific language governing permissions and limitations
 # under the License.
 import multiprocessing as mp
-import os
 from os import path
 
 import numpy as np
-import pytest
 import tvm
 from tvm import relay
 from tvm.driver import tvmc
-from tvm.driver.tvmc.model import TVMCModel, TVMCPackage, TVMCResult
+from tvm.driver.tvmc.model import TVMCModel
 from tvm.relay.transform import AMPRewrite
 from tvm.relay.transform.transform import InferType
+
+
+def load_model(name):
+    return tvmc.load(path.join("./models", name))
 
 
 def get_one_conv_model(N=4, C_I=16, C_O=64, H=224, W=224, K=3, dtype="float32"):
@@ -51,7 +53,7 @@ def get_one_conv_model(N=4, C_I=16, C_O=64, H=224, W=224, K=3, dtype="float32"):
 
 
 def get_distillbert(run_pass=True):
-    tvmc_model = tvmc.load("/Users/andrewzhaoluo/Downloads/distilbert.onnx")
+    tvmc_model = load_model("/Users/andrewzhaoluo/Downloads/distilbert.onnx")
     if run_pass:
         mod, params = tvmc_model.mod, tvmc_model.params
         fp16_mod = AMPRewrite()(mod)
@@ -60,7 +62,7 @@ def get_distillbert(run_pass=True):
 
 
 def get_bert(run_pass=True):
-    tvmc_model = tvmc.load("./models/bert-base-uncased.pb")
+    tvmc_model = load_model("./models/bert-base-uncased.pb")
     mod, params = tvmc_model.mod, tvmc_model.params
     # Weird functions we don't use are in there it's weird
     mod = tvm.IRModule.from_expr(mod["main"])
@@ -79,14 +81,17 @@ if __name__ == "__main__":
     # tvmc_model = get_one_conv_model(dtype="float16")
     # tvmc_model = get_one_conv_model(dtype="float32")
     # tvmc_model = get_distillbert()
-    tvmc_model = get_bert(run_pass=False)
+    tvmc_model = get_bert(run_pass=True)
     tvmc_model.summary()
 
     # Create tuning artifacts
     target = "llvm -mcpu=apple-latest -mtriple=arm64-apple-macos"
-    tuning_records = tvmc.tune(tvmc_model, target=target, trials=1000)
+    tuning_records = tvmc.tune(
+        tvmc_model, target=target, trials=10000, repeat=5, tuner="xgb_knob"
+    )
 
     # Create package artifacts
     package = tvmc.compile(tvmc_model, target=target, tuning_records=tuning_records)
-    result = tvmc.run(package, device="cpu", repeat=100, number=10)
+    result = tvmc.run(package, device="cpu", repeat=1000, number=1)
     print(result)
+    print()
