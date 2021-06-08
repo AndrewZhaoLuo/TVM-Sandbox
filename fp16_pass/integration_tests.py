@@ -29,17 +29,33 @@ def run_module(mod, mod_params):
         return [result.asnumpy()]
 
 
-def verify_fp32_fp16_output_close(mod, mod_params, rtol=1e-3, atol=0):
+def verify_fp32_fp16_output_close(mod, mod_params, rtol=1e-3, atol=0, run_opt=True):
     mod = InferType()(mod)
     result_fp32 = run_module(mod, mod_params)
-    fp16_mod = AMPRewrite()(mod)
-    result_fp16 = run_module(fp16_mod, mod_params)
+
+    if run_opt:
+        # mod = tvm.relay.transform.FastMath()(mod)
+        mod = tvm.relay.transform.EliminateCommonSubexpr()(mod)
+        mod = tvm.relay.transform.FoldConstant()(mod)
+        mod = tvm.relay.transform.CombineParallelBatchMatmul()(mod)
+        mod = tvm.relay.transform.FoldConstant()(mod)
+
+    mod = AMPRewrite()(mod)
+
+    if run_opt:
+        # run one more pass to clean up new subgraph
+        mod = tvm.relay.transform.FastMath()(mod)
+        mod = tvm.relay.transform.EliminateCommonSubexpr()(mod)
+        mod = tvm.relay.transform.FoldConstant()(mod)
+        mod = tvm.relay.transform.CombineParallelBatchMatmul()(mod)
+        mod = tvm.relay.transform.FoldConstant()(mod)
+    result_fp16 = run_module(mod, mod_params)
 
     # Ensure the results are close
     for fp32, fp16 in zip(result_fp32, result_fp16):
         np.testing.assert_allclose(fp32, fp16, rtol=rtol, atol=atol)
 
-    return fp16_mod
+    return mod
 
 
 # Native relay models
@@ -228,5 +244,7 @@ def test_pb_bert():
     # Weird functions we don't use are in there it's weird
     mod = tvm.IRModule.from_expr(mod["main"])
     mod_params["x"] = np.random.randint(0, 100, size=[1, 128]).astype("int32")
-    output_mod = verify_fp32_fp16_output_close(mod, mod_params, atol=0.05, rtol=0.01)
+    output_mod = verify_fp32_fp16_output_close(
+        mod, mod_params, atol=0.05, rtol=0.01, run_opt=True
+    )
     assert not tvm.ir.structural_equal(mod, output_mod)

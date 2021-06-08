@@ -22,8 +22,7 @@ import tvm
 from tvm import relay
 from tvm.driver import tvmc
 from tvm.driver.tvmc.model import TVMCModel
-from tvm.relay.transform import AMPRewrite
-from tvm.relay.transform.transform import InferType
+from tvm.relay.transform import AMPRewrite, InferType
 
 
 def load_model(name):
@@ -53,7 +52,7 @@ def get_one_conv_model(N=4, C_I=16, C_O=64, H=224, W=224, K=3, dtype="float32"):
 
 
 def get_distillbert(run_pass=True):
-    tvmc_model = load_model("/Users/andrewzhaoluo/Downloads/distilbert.onnx")
+    tvmc_model = load_model("distilbert.onnx")
     if run_pass:
         mod, params = tvmc_model.mod, tvmc_model.params
         fp16_mod = AMPRewrite()(mod)
@@ -61,15 +60,44 @@ def get_distillbert(run_pass=True):
     return tvmc_model
 
 
-def get_bert(run_pass=True):
-    tvmc_model = load_model("./models/bert-base-uncased.pb")
+def get_bert(run_pass=True, run_opt=True):
+    tvmc_model = load_model("bert-base-uncased.pb")
     mod, params = tvmc_model.mod, tvmc_model.params
     # Weird functions we don't use are in there it's weird
     mod = tvm.IRModule.from_expr(mod["main"])
+
+    if run_opt:
+        # mod = tvm.relay.transform.FastMath()(mod)
+        mod = tvm.relay.transform.EliminateCommonSubexpr()(mod)
+        BindPass = tvm.relay.transform.function_pass(
+            lambda fn, new_mod, ctx: tvm.relay.build_module.bind_params_by_name(
+                fn, params
+            ),
+            opt_level=1,
+        )
+        mod = BindPass(mod)
+        mod = tvm.relay.transform.FoldConstant()(mod)
+        mod = tvm.relay.transform.CombineParallelBatchMatmul()(mod)
+        mod = tvm.relay.transform.FoldConstant()(mod)
+
     if run_pass:
         mod = InferType()(mod)
-        fp16_mod = AMPRewrite()(mod)
-        return TVMCModel(fp16_mod, params)
+        mod = AMPRewrite()(mod)
+
+    if run_opt and run_pass:
+        # run one more pass to clean up new subgraph
+        mod = tvm.relay.transform.FastMath()(mod)
+        mod = tvm.relay.transform.EliminateCommonSubexpr()(mod)
+        BindPass = tvm.relay.transform.function_pass(
+            lambda fn, new_mod, ctx: tvm.relay.build_module.bind_params_by_name(
+                fn, params
+            ),
+            opt_level=1,
+        )
+        mod = BindPass(mod)
+        mod = tvm.relay.transform.FoldConstant()(mod)
+        mod = tvm.relay.transform.CombineParallelBatchMatmul()(mod)
+        mod = tvm.relay.transform.FoldConstant()(mod)
     return TVMCModel(mod, params)
 
 
