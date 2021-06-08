@@ -51,22 +51,12 @@ def get_one_conv_model(N=4, C_I=16, C_O=64, H=224, W=224, K=3, dtype="float32"):
     return tvmc.TVMCModel(mod, params)
 
 
-def get_distillbert(run_pass=True):
-    tvmc_model = load_model("distilbert.onnx")
-    if run_pass:
-        mod, params = tvmc_model.mod, tvmc_model.params
-        fp16_mod = AMPRewrite()(mod)
-        return TVMCModel(fp16_mod, params)
-    return tvmc_model
-
-
-def get_bert(run_pass=True, run_opt=True):
-    tvmc_model = load_model("bert-base-uncased.pb")
+def graph_optimize(tvmc_model, run_fp16_pass, run_other_opts):
     mod, params = tvmc_model.mod, tvmc_model.params
     # Weird functions we don't use are in there it's weird
     mod = tvm.IRModule.from_expr(mod["main"])
 
-    if run_opt:
+    if run_other_opts:
         # mod = tvm.relay.transform.FastMath()(mod)
         mod = tvm.relay.transform.EliminateCommonSubexpr()(mod)
         BindPass = tvm.relay.transform.function_pass(
@@ -80,11 +70,11 @@ def get_bert(run_pass=True, run_opt=True):
         mod = tvm.relay.transform.CombineParallelBatchMatmul()(mod)
         mod = tvm.relay.transform.FoldConstant()(mod)
 
-    if run_pass:
+    if run_fp16_pass:
         mod = InferType()(mod)
         mod = AMPRewrite()(mod)
 
-    if run_opt and run_pass:
+    if run_other_opts and run_fp16_pass:
         # run one more pass to clean up new subgraph
         mod = tvm.relay.transform.FastMath()(mod)
         mod = tvm.relay.transform.EliminateCommonSubexpr()(mod)
@@ -101,25 +91,43 @@ def get_bert(run_pass=True, run_opt=True):
     return TVMCModel(mod, params)
 
 
+def get_distillbert(run_pass=True, run_opts=True):
+    tvmc_model = load_model("distilbert.onnx")
+    return graph_optimize(tvmc_model, run_pass, run_opts)
+
+
+def get_bert(run_pass=True, run_opts=True):
+    tvmc_model = load_model("bert-base-uncased.pb")
+    return graph_optimize(tvmc_model, run_pass, run_opts)
+
+
+def get_yolo2(run_pass=True, run_opts=True):
+    tvmc_model = load_model("yolov2-coco-9.onnx")
+    return graph_optimize(tvmc_model, run_pass, run_opts)
+
+
 if __name__ == "__main__":
     # macOS has 'spawn' as default which doesn't work for tvm
     mp.set_start_method("fork")
 
-    """Get Module"""
-    # tvmc_model = get_one_conv_model(dtype="float16")
-    # tvmc_model = get_one_conv_model(dtype="float32")
-    # tvmc_model = get_distillbert()
-    tvmc_model = get_bert(run_pass=True)
-    tvmc_model.summary()
+    for run_fp16_pass in [True, False]:
+        print("FP16 pass" if run_fp16_pass else "FP32 pass")
+        """Get Module"""
+        # tvmc_model = get_one_conv_model(dtype="float16")
+        # tvmc_model = get_one_conv_model(dtype="float32")
+        # tvmc_model = get_distillbert()
+        # tvmc_model = get_bert(run_pass=True)
+        tvmc_model = get_yolo2(run_pass=run_fp16_pass)
+        # tvmc_model.summary()
 
-    # Create tuning artifacts
-    target = "llvm -mcpu=apple-latest -mtriple=arm64-apple-macos"
-    tuning_records = tvmc.tune(
-        tvmc_model, target=target, trials=10000, repeat=5, tuner="xgb_knob"
-    )
+        # Create tuning artifacts
+        target = "llvm -mcpu=apple-latest -mtriple=arm64-apple-macos"
+        tuning_records = tvmc.tune(
+            tvmc_model, target=target, trials=10000, repeat=5, tuner="xgb_knob"
+        )
 
-    # Create package artifacts
-    package = tvmc.compile(tvmc_model, target=target, tuning_records=tuning_records)
-    result = tvmc.run(package, device="cpu", repeat=1000, number=1)
-    print(result)
-    print()
+        # Create package artifacts
+        package = tvmc.compile(tvmc_model, target=target, tuning_records=tuning_records)
+        result = tvmc.run(package, device="cpu", repeat=1000, number=1)
+        print(result)
+        print()
