@@ -8,6 +8,7 @@ import torch.onnx
 import torchvision
 import tvm
 from tvm import relay
+from tvm.driver import tvmc
 from tvm.relay.op.tensor import exp
 from tvm.relay.testing import densenet, lstm, mobilenet, resnet, resnet_3d, squeezenet
 from tvm.relay.transform import AMPRewrite
@@ -214,5 +215,15 @@ def test_onnx_distillbert():
 
     mod, mod_params = relay.frontend.from_onnx(onnx_model, shape={"input.1": [10, 100]})
     mod_params["input.1"] = np.random.randint(0, 100, size=[10, 100])
+    output_mod = verify_fp32_fp16_output_close(mod, mod_params, atol=0.05, rtol=0.01)
+    assert not tvm.ir.structural_equal(mod, output_mod)
+
+
+def test_pb_bert():
+    tvmc_model = tvmc.load("./models/bert-base-uncased.pb")
+    mod, mod_params = tvmc_model.mod, tvmc_model.params
+    # Weird functions we don't use are in there it's weird
+    mod = tvm.IRModule.from_expr(mod["main"])
+    mod_params["x"] = np.random.randint(0, 100, size=[1, 128]).astype('int32')
     output_mod = verify_fp32_fp16_output_close(mod, mod_params, atol=0.05, rtol=0.01)
     assert not tvm.ir.structural_equal(mod, output_mod)
