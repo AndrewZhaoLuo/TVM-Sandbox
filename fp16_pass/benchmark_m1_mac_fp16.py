@@ -24,71 +24,15 @@ import tvm
 from tvm import relay
 from tvm.driver import tvmc
 from tvm.driver.tvmc.model import TVMCModel, TVMCPackage, TVMCResult
+from tvm.relay.transform import AMPRewrite
+from tvm.relay.transform.transform import InferType
 
 
-def test_tvmc_workflow(keras_simple):
-    pytest.importorskip("tensorflow")
-
-    tvmc_model = tvmc.load(keras_simple)
-    tuning_records = tvmc.tune(
-        tvmc_model, target="llvm", enable_autoscheduler=True, trials=2
-    )
-    tvmc_package = tvmc.compile(
-        tvmc_model, tuning_records=tuning_records, target="llvm"
-    )
-    result = tvmc.run(tvmc_package, device="cpu")
-    assert type(tvmc_model) is TVMCModel
-    assert type(tvmc_package) is TVMCPackage
-    assert type(result) is TVMCResult
-    assert path.exists(tuning_records)
-    assert type(result.outputs) is dict
-    assert type(result.times) is tuple
-    assert "output_0" in result.outputs.keys()
-
-
-def test_save_load_model(keras_simple, tmpdir_factory):
-    pytest.importorskip("onnx")
-
-    tmpdir = tmpdir_factory.mktemp("data")
-    tvmc_model = tvmc.load(keras_simple)
-
-    # Create tuning artifacts
-    tvmc.tune(tvmc_model, target="llvm", trials=2)
-
-    # Create package artifacts
-    tvmc.compile(tvmc_model, target="llvm")
-
-    # Save the model to disk
-    model_path = os.path.join(tmpdir, "saved_model.tar")
-    tvmc_model.save(model_path)
-
-    # Load the model into a new TVMCModel
-    new_tvmc_model = TVMCModel(model_path=model_path)
-
-    # Check that the two models match.
-    assert str(new_tvmc_model.mod) == str(tvmc_model.mod)
-    # Check that tuning records and the compiled package are recoverable.
-    assert path.exists(new_tvmc_model.default_package_path())
-    assert path.exists(new_tvmc_model.default_tuning_records_path())
-
-
-if __name__ == "__main__":
-    # macOS has 'spawn' as default which doesn't work
-    mp.set_start_method("fork")
-
-    """Get Module"""
-    dtype = "float32"
-    N = 4
-    C_I = 16
-    C_O = 64
-    H = 224
-    W = 224
-    K = 3
+def get_one_conv_model(N=4, C_I=16, C_O=64, H=224, W=224, K=3, dtype="float32"):
     data_shape = [N, C_I, H, W]
     kernel_shape = [C_O, C_I, K, K]
     data = relay.var("data", dtype=dtype, shape=data_shape)
     weight = relay.var("weight", dtype=dtype, shape=kernel_shape)
-
     conv = relay.nn.conv2d(
         data=data,
         weight=weight,
@@ -103,12 +47,46 @@ if __name__ == "__main__":
         # "data": np.random.uniform(-1, 1, size=data_shape),
         "weight": np.random.uniform(-1, 1, size=kernel_shape).astype(dtype),
     }
+    return tvmc.TVMCModel(mod, params)
 
-    tvmc_model = tvmc.TVMCModel(mod, params)
+
+def get_distillbert(run_pass=True):
+    tvmc_model = tvmc.load("/Users/andrewzhaoluo/Downloads/distilbert.onnx")
+    if run_pass:
+        mod, params = tvmc_model.mod, tvmc_model.params
+        fp16_mod = AMPRewrite()(mod)
+        return TVMCModel(fp16_mod, params)
+    return tvmc_model
+
+
+def get_bert(run_pass=True):
+    tvmc_model = tvmc.load("./models/bert-base-uncased.pb")
+    mod, params = tvmc_model.mod, tvmc_model.params
+    # Weird functions we don't use are in there it's weird
+    mod = tvm.IRModule.from_expr(mod["main"])
+    if run_pass:
+        mod = InferType()(mod)
+        fp16_mod = AMPRewrite()(mod)
+        return TVMCModel(fp16_mod, params)
+    return TVMCModel(mod, params)
+
+
+if __name__ == "__main__":
+    # macOS has 'spawn' as default which doesn't work for tvm
+    mp.set_start_method("fork")
+
+    """Get Module"""
+    # tvmc_model = get_one_conv_model(dtype="float16")
+    # tvmc_model = get_one_conv_model(dtype="float32")
+    # tvmc_model = get_distillbert()
+    tvmc_model = get_bert(run_pass=False)
+    tvmc_model.summary()
 
     # Create tuning artifacts
     target = "llvm -mcpu=apple-latest -mtriple=arm64-apple-macos"
-    tvmc.tune(tvmc_model, target=target, trials=100)
+    tuning_records = tvmc.tune(tvmc_model, target=target, trials=1000)
 
     # Create package artifacts
-    tvmc.compile(tvmc_model, target=target)
+    package = tvmc.compile(tvmc_model, target=target, tuning_records=tuning_records)
+    result = tvmc.run(package, device="cpu", repeat=100, number=10)
+    print(result)
