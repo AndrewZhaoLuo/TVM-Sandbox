@@ -248,3 +248,16 @@ def test_pb_bert():
         mod, mod_params, atol=0.05, rtol=0.01, run_opt=True
     )
     assert not tvm.ir.structural_equal(mod, output_mod)
+
+
+def test_onnx_ssd():
+    tvmc_model = tvmc.load(path.join(MODELS_DIR, "ssd-10.onnx"))
+    mod, mod_params = tvmc_model.mod, tvmc_model.params
+    # Weird functions we don't use are in there it's weird
+    mod = tvm.IRModule.from_expr(mod["main"])
+    mod_params["image"] = np.random.uniform(-1, 1, size=[1, 3, 1200, 1200]).astype(
+        "float32"
+    )
+    # TODO: this works but the threshold for scores is too low where there are errors
+    output_mod = verify_fp32_fp16_output_close(mod, mod_params, atol=0.05, rtol=0.01)
+    assert not tvm.ir.structural_equal(mod, output_mod)

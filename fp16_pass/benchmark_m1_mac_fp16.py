@@ -25,8 +25,8 @@ from tvm.driver.tvmc.model import TVMCModel
 from tvm.relay.transform import AMPRewrite, InferType
 
 
-def load_model(name):
-    return tvmc.load(path.join("./models", name))
+def load_model(name, **kwargs):
+    return tvmc.load(path.join("./models", name), **kwargs)
 
 
 def get_one_conv_model(N=4, C_I=16, C_O=64, H=224, W=224, K=3, dtype="float32"):
@@ -88,6 +88,7 @@ def graph_optimize(tvmc_model, run_fp16_pass, run_other_opts):
         mod = tvm.relay.transform.FoldConstant()(mod)
         mod = tvm.relay.transform.CombineParallelBatchMatmul()(mod)
         mod = tvm.relay.transform.FoldConstant()(mod)
+
     return TVMCModel(mod, params)
 
 
@@ -106,6 +107,11 @@ def get_yolo2(run_pass=True, run_opts=True):
     return graph_optimize(tvmc_model, run_pass, run_opts)
 
 
+def get_ssd_resnet(run_pass=True, run_opts=True):
+    tvmc_model = load_model("ssd-10.onnx")
+    return graph_optimize(tvmc_model, run_pass, run_opts)
+
+
 if __name__ == "__main__":
     # macOS has 'spawn' as default which doesn't work for tvm
     mp.set_start_method("fork")
@@ -117,17 +123,18 @@ if __name__ == "__main__":
         # tvmc_model = get_one_conv_model(dtype="float32")
         # tvmc_model = get_distillbert()
         # tvmc_model = get_bert(run_pass=True)
-        tvmc_model = get_yolo2(run_pass=run_fp16_pass)
+        # tvmc_model = get_yolo2(run_pass=run_fp16_pass)
+        tvmc_model = get_ssd_resnet(run_pass=run_fp16_pass)
         # tvmc_model.summary()
 
         # Create tuning artifacts
         target = "llvm -mcpu=apple-latest -mtriple=arm64-apple-macos"
         tuning_records = tvmc.tune(
-            tvmc_model, target=target, trials=10000, repeat=5, tuner="xgb_knob"
+            tvmc_model, target=target, trials=100, repeat=5, tuner="xgb_knob"
         )
 
         # Create package artifacts
         package = tvmc.compile(tvmc_model, target=target, tuning_records=tuning_records)
-        result = tvmc.run(package, device="cpu", repeat=1000, number=1)
+        result = tvmc.run(package, device="cpu", repeat=35, number=1)
         print(result)
         print()
