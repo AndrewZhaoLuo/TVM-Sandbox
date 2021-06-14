@@ -12,8 +12,14 @@ from tvm import relay
 from tvm.driver import tvmc
 from tvm.relay.op.tensor import exp
 from tvm.relay.testing import densenet, lstm, mobilenet, resnet, resnet_3d, squeezenet
-from tvm.relay.transform import AMPRewrite
-from tvm.relay.transform.transform import AnnotateSpans, InferType
+from tvm.relay.transform import (
+    AnnotateSpans,
+    InferType,
+    ToMixedPrecision,
+    mixed_precision,
+)
+
+mixed_precision.register_default_mixed_precision_attributes()
 
 MODELS_DIR = "./models/"
 
@@ -40,7 +46,7 @@ def verify_fp32_fp16_output_close(mod, mod_params, rtol=1e-3, atol=0, run_opt=Tr
         mod = tvm.relay.transform.CombineParallelBatchMatmul()(mod)
         mod = tvm.relay.transform.FoldConstant()(mod)
 
-    mod = AMPRewrite()(mod)
+    mod = ToMixedPrecision()(mod)
 
     if run_opt:
         # run one more pass to clean up new subgraph
