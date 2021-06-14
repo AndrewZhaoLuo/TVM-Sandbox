@@ -78,13 +78,6 @@ def graph_optimize(tvmc_model, run_fp16_pass, run_other_opts):
         # run one more pass to clean up new subgraph
         mod = tvm.relay.transform.FastMath()(mod)
         mod = tvm.relay.transform.EliminateCommonSubexpr()(mod)
-        BindPass = tvm.relay.transform.function_pass(
-            lambda fn, new_mod, ctx: tvm.relay.build_module.bind_params_by_name(
-                fn, params
-            ),
-            opt_level=1,
-        )
-        mod = BindPass(mod)
         mod = tvm.relay.transform.FoldConstant()(mod)
         mod = tvm.relay.transform.CombineParallelBatchMatmul()(mod)
         mod = tvm.relay.transform.FoldConstant()(mod)
@@ -116,25 +109,25 @@ if __name__ == "__main__":
     # macOS has 'spawn' as default which doesn't work for tvm
     mp.set_start_method("fork")
 
-    for run_fp16_pass in [True, False]:
+    for run_fp16_pass in [False, True]:
         print("FP16 pass" if run_fp16_pass else "FP32 pass")
         """Get Module"""
         # tvmc_model = get_one_conv_model(dtype="float16")
         # tvmc_model = get_one_conv_model(dtype="float32")
         # tvmc_model = get_distillbert()
         # tvmc_model = get_bert(run_pass=True)
-        # tvmc_model = get_yolo2(run_pass=run_fp16_pass)
-        tvmc_model = get_ssd_resnet(run_pass=run_fp16_pass)
+        tvmc_model = get_yolo2(run_pass=run_fp16_pass)
+        # tvmc_model = get_ssd_resnet(run_pass=run_fp16_pass)
         # tvmc_model.summary()
 
         # Create tuning artifacts
         target = "llvm -mcpu=apple-latest -mtriple=arm64-apple-macos"
         tuning_records = tvmc.tune(
-            tvmc_model, target=target, trials=100, repeat=5, tuner="xgb_knob"
+            tvmc_model, target=target, trials=10000, repeat=5, tuner="xgb_knob"
         )
 
         # Create package artifacts
         package = tvmc.compile(tvmc_model, target=target, tuning_records=tuning_records)
-        result = tvmc.run(package, device="cpu", repeat=35, number=1)
+        result = tvmc.run(package, device="cpu", repeat=1000, number=1)
         print(result)
         print()
