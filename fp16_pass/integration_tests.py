@@ -19,8 +19,6 @@ from tvm.relay.transform import (
     mixed_precision,
 )
 
-mixed_precision.register_default_mixed_precision_attributes()
-
 MODELS_DIR = "./models/"
 
 
@@ -180,6 +178,19 @@ def test_onnx_yolo2():
         onnx_model, shape={"input.1": [1, 3, 416, 416]}
     )
     mod_params["input.1"] = np.random.uniform(0, 1, size=[1, 3, 416, 416]).astype(
+        "float32"
+    )
+    output_mod = verify_fp32_fp16_output_close(mod, mod_params, atol=0.05, rtol=0.01)
+    assert not tvm.ir.structural_equal(mod, output_mod)
+
+
+def test_onnx_yolo4():
+    model_path = path.join(MODELS_DIR, "yolov4.onnx")
+    onnx_model = onnx.load(model_path)
+    mod, mod_params = relay.frontend.from_onnx(
+        onnx_model, shape={"input_1:0": [1, 416, 416, 3]}, freeze_params=True
+    )
+    mod_params["input_1:0"] = np.random.uniform(0, 1, size=[1, 416, 416, 3]).astype(
         "float32"
     )
     output_mod = verify_fp32_fp16_output_close(mod, mod_params, atol=0.05, rtol=0.01)
