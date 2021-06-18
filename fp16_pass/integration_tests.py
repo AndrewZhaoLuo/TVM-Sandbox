@@ -5,19 +5,15 @@ from typing import *
 
 import numpy as np
 import onnx
+import tensorflow as tf
 import torch.onnx
 import torchvision
 import tvm
+import tvm.relay.testing.tf as tf_testing
 from tvm import relay
 from tvm.driver import tvmc
-from tvm.relay.op.tensor import exp
 from tvm.relay.testing import densenet, lstm, mobilenet, resnet, resnet_3d, squeezenet
-from tvm.relay.transform import (
-    AnnotateSpans,
-    InferType,
-    ToMixedPrecision,
-    mixed_precision,
-)
+from tvm.relay.transform import InferType, ToMixedPrecision, mixed_precision
 
 MODELS_DIR = "./models/"
 
@@ -31,6 +27,28 @@ def run_module(mod, mod_params):
         return result
     else:
         return [result.asnumpy()]
+
+
+def convert_to_list(x):
+    if not isinstance(x, list):
+        x = [x]
+    return x
+
+
+def run_tf_graph(sess, input_data, input_node, output_node):
+    """Generic function to execute tensorflow"""
+    input_data = convert_to_list(input_data)
+    input_node = convert_to_list(input_node)
+    output_node = convert_to_list(output_node)
+
+    tensor = [sess.graph.get_tensor_by_name(output_name) for output_name in output_node]
+
+    input_dict = {e: input_data[i] for i, e in enumerate(input_node)}
+    if len(input_node) == 1 and input_node[0] == "":
+        output_data = sess.run(tensor)
+    else:
+        output_data = sess.run(tensor, input_dict)
+    return output_data
 
 
 def verify_fp32_fp16_output_close(mod, mod_params, rtol=1e-3, atol=0, run_opt=True):
@@ -276,5 +294,31 @@ def test_onnx_ssd():
         "float32"
     )
     # TODO: this works but the threshold for scores is too low where there are errors
+    output_mod = verify_fp32_fp16_output_close(mod, mod_params, atol=0.05, rtol=0.01)
+    assert not tvm.ir.structural_equal(mod, output_mod)
+
+
+def test_tf_ssd_impl():
+    """Test SSD with backbone MobileNet V1"""
+    # SHOULD FAIL UNTIL ADT types are supported
+    with tf.Graph().as_default():
+        graph_def = tf_testing.get_workload(
+            "object_detection/ssd_mobilenet_v1_ppn_shared_"
+            "box_predictor_300x300_coco14_sync_2018_07_03.pb"
+        )
+        # Call the utility to import the graph definition into default graph.
+        graph_def = tf_testing.ProcessGraphDefParam(graph_def)
+
+    data = [np.random.uniform(0.0, 255.0, size=(1, 512, 512, 3)).astype("uint8")]
+    in_node = ["image_tensor"]
+    out_node = ["detection_boxes", "detection_scores", "detection_classes"]
+
+    shape_dict = {
+        e: i.shape if hasattr(i, "shape") else () for e, i in zip(in_node, data)
+    }
+    mod, mod_params = relay.frontend.from_tensorflow(
+        graph_def, layout="NCHW", shape=shape_dict, outputs=out_node
+    )
+    mod_params[in_node[0]] = data[0]
     output_mod = verify_fp32_fp16_output_close(mod, mod_params, atol=0.05, rtol=0.01)
     assert not tvm.ir.structural_equal(mod, output_mod)
