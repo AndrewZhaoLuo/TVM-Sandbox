@@ -114,6 +114,10 @@ def benchmark_model(
     run_other_opts=True,
     target="llvm",
     target_host="llvm -mcpu=apple-latest -mtriple=arm64-apple-macos",
+    tuning_trials=10000,
+    tuning_repeat_trials=5,
+    measure_number=100,
+    measure_repeats=10,
 ):
     print("FP16 pass" if run_fp16_pass else "FP32 pass")
     """Get Module"""
@@ -121,8 +125,8 @@ def benchmark_model(
     tuning_records = tvmc.tune(
         tvmc_model,
         target=target,
-        trials=100,
-        repeat=5,
+        trials=tuning_trials,
+        repeat=tuning_repeat_trials,
         tuner="xgb_knob",
         target_host=target_host,
     )
@@ -130,7 +134,10 @@ def benchmark_model(
     # Create package artifacts
     package = tvmc.compile(tvmc_model, target=target, tuning_records=tuning_records)
     result = tvmc.run(
-        package, device="cpu" if target == "llvm" else target, repeat=1000, number=1
+        package,
+        device="cpu" if target == "llvm" else target,
+        repeat=measure_number,
+        number=measure_repeats,
     )
     print(result)
     print()
