@@ -1,18 +1,17 @@
-import tempfile
-from collections import defaultdict
+"""
+Tests large amount of real life models downloaded from internet. Need ./models/ folder
+"""
 from os import path
 from typing import *
 
 import numpy as np
 import onnx
 import tensorflow as tf
-import torch.onnx
-import torchvision
 import tvm
 import tvm.relay.testing.tf as tf_testing
 from tvm import relay
 from tvm.driver import tvmc
-from tvm.relay.testing import densenet, lstm, mobilenet, resnet, resnet_3d, squeezenet
+from tvm.relay.testing import densenet, mobilenet, resnet, resnet_3d, squeezenet
 from tvm.relay.transform import InferType, ToMixedPrecision, mixed_precision
 
 MODELS_DIR = "./models/"
