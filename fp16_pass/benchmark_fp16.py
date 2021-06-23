@@ -96,7 +96,7 @@ def benchmark_model(
     run_fp16_pass=True,
     run_other_opts=True,
     target="llvm",
-    target_host="llvm -mcpu=apple-latest -mtriple=arm64-apple-macos",
+    target_host="llvm",
     tuning_trials=10000,
     tuning_repeat_trials=5,
     measure_number=100,
