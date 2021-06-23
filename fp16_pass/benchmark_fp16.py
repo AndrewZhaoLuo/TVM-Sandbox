@@ -19,7 +19,7 @@ def graph_optimize(tvmc_model, run_fp16_pass, run_other_opts):
     mod = tvm.IRModule.from_expr(mod["main"])
 
     if run_other_opts:
-        # mod = tvm.relay.transform.FastMath()(mod)
+        mod = tvm.relay.transform.FastMath()(mod)
         mod = tvm.relay.transform.EliminateCommonSubexpr()(mod)
         BindPass = tvm.relay.transform.function_pass(
             lambda fn, new_mod, ctx: tvm.relay.build_module.bind_params_by_name(
@@ -38,7 +38,6 @@ def graph_optimize(tvmc_model, run_fp16_pass, run_other_opts):
 
     if run_other_opts and run_fp16_pass:
         # run one more pass to clean up new subgraph
-        mod = tvm.relay.transform.FastMath()(mod)
         mod = tvm.relay.transform.EliminateCommonSubexpr()(mod)
         mod = tvm.relay.transform.FoldConstant()(mod)
         mod = tvm.relay.transform.CombineParallelBatchMatmul()(mod)
