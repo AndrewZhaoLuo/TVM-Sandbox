@@ -38,6 +38,7 @@ def graph_optimize(tvmc_model, run_fp16_pass, run_other_opts):
 
     if run_other_opts and run_fp16_pass:
         # run one more pass to clean up new subgraph
+        mod = tvm.relay.transform.FastMath()(mod)
         mod = tvm.relay.transform.EliminateCommonSubexpr()(mod)
         mod = tvm.relay.transform.FoldConstant()(mod)
         mod = tvm.relay.transform.CombineParallelBatchMatmul()(mod)
