@@ -6,20 +6,20 @@ import tvm
 from tvm import relay
 from tvm.driver import tvmc
 from tvm.driver.tvmc.model import TVMCModel
-from tvm.relay.transform import InferType, ToMixedPrecision, mixed_precision
+from tvm.relay.transform import InferType, ToMixedPrecision
 
 
 def load_model(name, **kwargs):
     return tvmc.load(path.join("./models", name), **kwargs)
 
 
-def graph_optimize(tvmc_model, run_fp16_pass, run_other_opts):
+def graph_optimize(tvmc_model, run_fp16_pass, run_other_opts, fast_math=True):
     mod, params = tvmc_model.mod, tvmc_model.params
     # Weird functions we don't use are in there it's weird
     mod = tvm.IRModule.from_expr(mod["main"])
 
     if run_other_opts:
-        mod = tvm.relay.transform.FastMath()(mod)
+        mod = tvm.relay.transform.FastMath()(mod) if fast_math else mod
         mod = tvm.relay.transform.EliminateCommonSubexpr()(mod)
         BindPass = tvm.relay.transform.function_pass(
             lambda fn, new_mod, ctx: tvm.relay.build_module.bind_params_by_name(
@@ -38,11 +38,11 @@ def graph_optimize(tvmc_model, run_fp16_pass, run_other_opts):
 
     if run_other_opts and run_fp16_pass:
         # run one more pass to clean up new subgraph
-        mod = tvm.relay.transform.FastMath()(mod)
         mod = tvm.relay.transform.EliminateCommonSubexpr()(mod)
         mod = tvm.relay.transform.FoldConstant()(mod)
         mod = tvm.relay.transform.CombineParallelBatchMatmul()(mod)
         mod = tvm.relay.transform.FoldConstant()(mod)
+        mod = tvm.relay.transform.FastMath()(mod) if fast_math else mod
 
     return TVMCModel(mod, params)
 
