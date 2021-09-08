@@ -180,20 +180,21 @@ def get_nllloss(input_tensor, target_tensor, weight_tensor=None, ignore_index=0)
 
 
 if __name__ == "__main__":
+    import pickle
+
+    inputs = pickle.load(open("./relay/inputs.pkl", "rb"))
+    input_np = inputs[0]
+    target_np = inputs[1].astype("int32")
+
     for i in range(100):
-        shape_input = [3, 5, 6, 6, 5]
-        shape_target = shape_input[:1] + shape_input[2:]
+        shape_input = input_np.shape
+        shape_target = target_np.shape
         result = get_nllloss(
             relay.var("input", shape=shape_input),
             relay.var("target", shape=shape_target, dtype="int32"),
             ignore_index=0,
         )
 
-        input_np = random.uniform(-10, 10, size=shape_input).astype("float32")
-        target_np = np.ones(shape_target)
-        target_np = target_np.flatten()
-        target_np[0] = 0
-        target_np = target_np.reshape(shape_target).astype("int32")
         mod = IRModule.from_expr(result)
         result = (
             relay.create_executor("vm", mod=mod)
