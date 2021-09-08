@@ -143,15 +143,26 @@ def get_tvm_output_with_vm(
     return [r.numpy() for r in result]
 
 
-def get_nllloss(input_tensor, target_tensor, weight_tensor=None, ignore_index=0):
+def get_nllloss(
+    input_tensor,
+    target_tensor,
+    weight_tensor=None,
+    ignore_index=0,
+    get_mask_tensor=False,
+    get_weights=False,
+):
     channels = infer_shape(input_tensor)[1]
     weight_tensor = relay.ones(
         [channels],
         dtype=input_tensor.type_annotation.dtype,
     )
+    relay.gather_nd
 
     loss = -relay.gather(
-        input_tensor, axis=1, indices=relay.expand_dims(target_tensor, 1)
+        input_tensor,
+        axis=1,
+        indices=relay.expand_dims(target_tensor, 1),
+        support_negative_indices=True,
     )
     loss = relay.squeeze(loss, axis=[1])
 
@@ -176,10 +187,15 @@ def get_nllloss(input_tensor, target_tensor, weight_tensor=None, ignore_index=0)
 
     weight_total = relay.sum(select_weights)
 
+    if get_mask_tensor:
+        return mask_tensor
+    if get_weights:
+        return select_weights
+
     return loss
 
 
-if __name__ == "__main__":
+def test_failing_onnx_test_case():
     import pickle
 
     inputs = pickle.load(open("./relay/inputs.pkl", "rb"))
@@ -189,14 +205,14 @@ if __name__ == "__main__":
     for i in range(100):
         shape_input = input_np.shape
         shape_target = target_np.shape
+
         result = get_nllloss(
             relay.var("input", shape=shape_input),
             relay.var("target", shape=shape_target, dtype="int32"),
             ignore_index=0,
         )
-
         mod = IRModule.from_expr(result)
-        result = (
+        result_masked = (
             relay.create_executor("vm", mod=mod)
             .evaluate()(
                 input_np,
@@ -204,4 +220,91 @@ if __name__ == "__main__":
             )
             .asnumpy()
         )
-        print(result.flatten()[:10])
+
+        result = get_nllloss(
+            relay.var("input", shape=shape_input),
+            relay.var("target", shape=shape_target, dtype="int32"),
+            ignore_index=0,
+            get_mask_tensor=True,
+        )
+        mod = IRModule.from_expr(result)
+        result_mask = (
+            relay.create_executor("vm", mod=mod)
+            .evaluate()(
+                # input_np,
+                target_np,
+            )
+            .asnumpy()
+        )
+
+        result = get_nllloss(
+            relay.var("input", shape=shape_input),
+            relay.var("target", shape=shape_target, dtype="int32"),
+            ignore_index=None,
+        )
+        mod = IRModule.from_expr(result)
+        result_unmasked = (
+            relay.create_executor("vm", mod=mod)
+            .evaluate()(
+                input_np,
+                target_np,
+            )
+            .asnumpy()
+        )
+
+        result = get_nllloss(
+            relay.var("input", shape=shape_input),
+            relay.var("target", shape=shape_target, dtype="int32"),
+            ignore_index=None,
+            get_weights=True,
+        )
+        mod = IRModule.from_expr(result)
+        result_weights = (
+            relay.create_executor("vm", mod=mod)
+            .evaluate()(
+                target_np,
+                input_np,
+            )
+            .asnumpy()
+        )
+
+        print("RESULT   :", list(result_masked.flatten()[:10]))
+        print("UNMASKED :", list(result_unmasked.flatten()[:10]))
+        print("MASK     :", list(result_mask.flatten()[:10]))
+        print("WEIGHTS  :", list(result_weights.flatten()[:10]))
+        print()
+
+
+def show_gather_negative_indices_fail(negative_indices=False, axis=1):
+    # Should give same result with and without negative_indices
+    input_shape = [3, 3, 3]
+    target_tensor_shape = [3, 3]
+    target_tensor_shape.insert(axis, 1)
+    input_tensor = relay.var("input_shape", shape=input_shape, dtype="float32")
+    target_tensor = relay.var("input_shape", shape=target_tensor_shape, dtype="int32")
+
+    result = relay.gather(
+        input_tensor, axis, target_tensor, support_negative_indices=negative_indices
+    )
+    mod = IRModule.from_expr(result)
+    vm_exe = relay.create_executor("vm", mod=mod)
+
+    numpy_input = np.arange(27).reshape(input_shape).astype("float32")
+
+    target_tensor = np.ones(target_tensor_shape).astype("int32")
+    if negative_indices:
+        target_tensor *= -1
+        target_tensor -= 1
+
+    result_unmasked = vm_exe.evaluate()(
+        numpy_input,
+        target_tensor,
+    ).asnumpy()
+
+    print(target_tensor)
+    print(result_unmasked)
+
+
+show_gather_negative_indices_fail(negative_indices=True, axis=0)
+show_gather_negative_indices_fail(negative_indices=False, axis=0)
+test_failing_onnx_test_case()
