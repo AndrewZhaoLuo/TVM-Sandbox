@@ -1,16 +1,12 @@
-"""
-Minimum example showing using VM causes autoscheduling logs not to be used properly -- missing configs
-"""
-
-import numpy as np
+from enum import auto
 
 import tvm
-from tvm import relay, auto_scheduler
 import tvm.relay.testing
-from tvm.contrib import graph_executor
+from tvm import auto_scheduler, relay
+from tvm.autotvm.graph_tuner import DPTuner, PBQPTuner
 
 
-def get_network(name, batch_size, layout="NHWC", dtype="float32"):
+def get_network(name, batch_size, layout="NCHW", dtype="float32"):
     """Get the symbol definition and random weight of a network"""
 
     # auto-scheduler prefers NHWC layout
@@ -83,69 +79,30 @@ def get_network(name, batch_size, layout="NHWC", dtype="float32"):
 # Define the neural network and compilation target
 network = "resnet-18"
 batch_size = 1
-layout = "NHWC"
-target = tvm.target.Target("cuda")
+layout = "NCHW"
+target = tvm.target.Target("llvm")
 dtype = "float32"
-log_file = "%s-%s-B%d-%s.json" % (network, layout, batch_size, target.kind.name)
+use_dp_tuner = True
 
 # Extract tasks from the network
 print("Extract tasks...")
 mod, params, input_shape, output_shape = get_network(
     network, batch_size, layout, dtype=dtype
 )
-tasks, task_weights = auto_scheduler.extract_tasks(mod["main"], params, target)
 
-for idx, task in enumerate(tasks):
-    print(
-        "========== Task %d  (workload key: %s) ==========" % (idx, task.workload_key)
+with tvm.transform.PassContext(
+    opt_level=3, config={"relay.backend.use_auto_scheduler": True}
+):
+    LOG_FILE = "resnet-18-NCHW-B1-llvm.json"
+    BEST_LOG_FILE = "resnet-18-NCHW-B1-llvm-graph-tuned.json"
+    target_op = [
+        relay.op.get("nn.conv2d"),
+    ]
+    Tuner = DPTuner if use_dp_tuner else PBQPTuner
+
+    executor = Tuner(mod, {"data": input_shape}, LOG_FILE, target_op, target)
+    executor.benchmark_layout_transform(
+        min_exec_num=1, runner=auto_scheduler.LocalRunner()
     )
-    print(task.compute_dag)
-
-
-def run_tuning():
-    print("Begin tuning...")
-    measure_ctx = auto_scheduler.LocalRPCMeasureContext(repeat=1, timeout=10)
-
-    tuner = auto_scheduler.TaskScheduler(tasks, task_weights)
-    tune_option = auto_scheduler.TuningOptions(
-        num_measure_trials=200,  # change this to 20000 to achieve the best performance
-        runner=measure_ctx.runner,
-        measure_callbacks=[auto_scheduler.RecordToFile(log_file)],
-    )
-
-    tuner.tune(tune_option)
-
-
-run_tuning()
-
-# If use_vm is true, we should get some errors with the thing not be able to find things!
-use_vm = True
-print("Compile...")
-
-with auto_scheduler.ApplyHistoryBest(log_file):
-    with tvm.transform.PassContext(
-        opt_level=3, config={"relay.backend.use_auto_scheduler": True}
-    ):
-        if use_vm:
-            # Pop off errors here
-            exe = relay.vm.compile(mod, target=target, params=params)
-            print("VM exe compiled! Are there any errors? :^0")
-        else:
-            lib = relay.build(mod, target=target, params=params)
-
-            # Create graph executor
-            dev = tvm.device(str(target), 0)
-            module = graph_executor.GraphModule(lib["default"](dev))
-            data_tvm = tvm.nd.array((np.random.uniform(size=input_shape)).astype(dtype))
-            module.set_input("data", data_tvm)
-
-            # Evaluate
-            print("Evaluate inference time cost...")
-            ftimer = module.module.time_evaluator(
-                "run", dev, repeat=3, min_repeat_ms=500
-            )
-            prof_res = np.array(ftimer().results) * 1e3  # convert to millisecond
-            print(
-                "Mean inference time (std dev): %.2f ms (%.2f ms)"
-                % (np.mean(prof_res), np.std(prof_res))
-            )
+    executor.run()
+    executor.write_opt_sch2record_file(BEST_LOG_FILE)
