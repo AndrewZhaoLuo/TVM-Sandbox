@@ -156,7 +156,6 @@ def get_nllloss(
         [channels],
         dtype=input_tensor.type_annotation.dtype,
     )
-    relay.gather_nd
 
     loss = -relay.gather(
         input_tensor,
@@ -168,7 +167,9 @@ def get_nllloss(
 
     expanded_target_tensor = relay.expand_dims(target_tensor, 0)
     expanded_target_tensor = relay.nn.batch_flatten(expanded_target_tensor)
-    flattened_weights = relay.gather_nd(weight_tensor, expanded_target_tensor)
+    flattened_weights = relay.gather_nd(
+        weight_tensor, expanded_target_tensor, support_negative_indices=True
+    )
     select_weights = relay.reshape_like(flattened_weights, loss)
     loss *= select_weights
 
@@ -195,10 +196,10 @@ def get_nllloss(
     return loss
 
 
-def test_failing_onnx_test_case():
+def test_failing_onnx_test_case(pickle_file, ignore_index):
     import pickle
 
-    inputs = pickle.load(open("./relay/inputs.pkl", "rb"))
+    inputs = pickle.load(open(pickle_file, "rb"))
     input_np = inputs[0]
     target_np = inputs[1].astype("int32")
 
@@ -209,29 +210,31 @@ def test_failing_onnx_test_case():
         result = get_nllloss(
             relay.var("input", shape=shape_input),
             relay.var("target", shape=shape_target, dtype="int32"),
-            ignore_index=0,
+            weight_tensor=relay.var("weight", shape=inputs[2].shape)
+            if len(inputs) == 3
+            else None,
+            ignore_index=10,
         )
         mod = IRModule.from_expr(result)
         result_masked = (
             relay.create_executor("vm", mod=mod)
-            .evaluate()(
-                input_np,
-                target_np,
-            )
+            .evaluate()(input_np, target_np)
             .asnumpy()
         )
 
         result = get_nllloss(
             relay.var("input", shape=shape_input),
             relay.var("target", shape=shape_target, dtype="int32"),
-            ignore_index=0,
+            weight_tensor=relay.var("weight", shape=inputs[2].shape)
+            if len(inputs) == 3
+            else None,
+            ignore_index=10,
             get_mask_tensor=True,
         )
         mod = IRModule.from_expr(result)
         result_mask = (
             relay.create_executor("vm", mod=mod)
             .evaluate()(
-                # input_np,
                 target_np,
             )
             .asnumpy()
@@ -240,38 +243,40 @@ def test_failing_onnx_test_case():
         result = get_nllloss(
             relay.var("input", shape=shape_input),
             relay.var("target", shape=shape_target, dtype="int32"),
+            weight_tensor=relay.var("weight", shape=inputs[2].shape)
+            if len(inputs) == 3
+            else None,
             ignore_index=None,
         )
         mod = IRModule.from_expr(result)
         result_unmasked = (
             relay.create_executor("vm", mod=mod)
-            .evaluate()(
-                input_np,
-                target_np,
-            )
+            .evaluate()(input_np, target_np)
             .asnumpy()
         )
 
         result = get_nllloss(
             relay.var("input", shape=shape_input),
             relay.var("target", shape=shape_target, dtype="int32"),
-            ignore_index=None,
+            weight_tensor=relay.var("weight", shape=inputs[2].shape)
+            if len(inputs) == 3
+            else None,
+            ignore_index=10,
             get_weights=True,
         )
         mod = IRModule.from_expr(result)
+        """
         result_weights = (
             relay.create_executor("vm", mod=mod)
-            .evaluate()(
-                target_np,
-                input_np,
-            )
+            .evaluate()(input_np, target_np)
             .asnumpy()
         )
+        """
 
         print("RESULT   :", list(result_masked.flatten()[:10]))
         print("UNMASKED :", list(result_unmasked.flatten()[:10]))
         print("MASK     :", list(result_mask.flatten()[:10]))
-        print("WEIGHTS  :", list(result_weights.flatten()[:10]))
+        # print("WEIGHTS  :", list(result_weights.flatten()[:10]))
         print()
 
 
@@ -307,4 +312,5 @@ def show_gather_negative_indices_fail(negative_indices=False, axis=1):
 
 show_gather_negative_indices_fail(negative_indices=True, axis=0)
 show_gather_negative_indices_fail(negative_indices=False, axis=0)
-test_failing_onnx_test_case()
+test_failing_onnx_test_case("./relay/inputs2.pkl", ignore_index=10)
+# test_failing_onnx_test_case("./relay/inputs.pkl", ignore_index=-5)
