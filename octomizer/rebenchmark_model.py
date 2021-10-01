@@ -16,8 +16,3 @@ for model in models:
         for platform in platforms:
             print(f"\t\tBenchmarking on platform {platform}")
             workflow = variant.benchmark(platform=platform, num_benchmark_trials=10, num_runs_per_trial=100)
-            workflow.wait()
-            if not workflow.completed():
-                print(f"\t\t\tWorkflow failed with status {workflow.status()}")
-            metrics = benchmark_workflow.metrics()
-            print(f"\t\t\tMetrics:\n{metrics}")
