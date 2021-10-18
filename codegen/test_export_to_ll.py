@@ -6,7 +6,7 @@ import tvm
 from tvm import te
 
 if __name__ == "__main__":
-    TARGET = "llvm -O=3 --fast-math"
+    TARGET = "llvm -opt-level=3 --fast-math"
 
     n = 128
     A = te.placeholder((n,), name="A", dtype="float32")
