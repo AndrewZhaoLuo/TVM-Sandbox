@@ -84,13 +84,16 @@ class Callback(DFPatternCallback):
         x = node_map[self.x][0]
         w = node_map[self.w][0]
 
-        x_shape = x.checked_type.shape
-        w_shape = w.checked_type.shape
+        x_shape = pre.args[0].checked_type.shape  # x.checked_type.shape
+        w_shape = pre.args[1].checked_type.shape  # w.checked_type.shape
 
         o_shape = list(x_shape)
         o_shape[-1] = w_shape[-1]
 
-        x = relay.reshape(x, [-1, x_shape[-1]])
+        size = 1
+        for i in range(len(x_shape) - 1):
+            size *= x_shape[i]
+        x = relay.reshape(x, [size, x_shape[-1]])
         w = relay.reshape(w, w_shape[-2:])
 
         y = relay.nn.matmul(x, w)
@@ -118,6 +121,8 @@ def rewrite_example():
         x, w, kernel_size=1, channels=10, data_layout="NHWC", kernel_layout="HWIO"
     )
 
+    y = y + y
+
     mod_orig = IRModule.from_expr(y)
     mod_orig = InferType()(mod_orig)
     new_mod = rewrite(Callback(), mod_orig["main"].body)
@@ -132,6 +137,38 @@ def rewrite_example():
     print("Matches?", (orig_result == new_result).all())
 
 
+def rewrite_deeplab_model():
+    import onnx
+
+    deeplab_optimized = onnx.load("./models/deeplab-optimized.onnx")
+    mod, params = relay.frontend.from_onnx(deeplab_optimized, freeze_params=True)
+    mod = InferType()(mod)
+
+    # Convert convs to NHWC Layout
+    desired_layouts = {
+        "nn.conv2d": ["NHWC", "default"],
+        "vision.roi_align": ["NHWC", "default"],
+    }
+    seq = tvm.transform.Sequential([relay.transform.ConvertLayout(desired_layouts)])
+    with tvm.transform.PassContext(
+        opt_level=3, config={"relay.backend.use_auto_scheduler": True}
+    ):
+        mod = seq(mod)
+
+    mod = InferType()(mod)
+    new_mod = rewrite(Callback(), mod["main"].body)
+    new_mod = IRModule.from_expr(new_mod)
+    new_mod = tvm.relay.transform.EliminateCommonSubexpr()(new_mod)
+    new_mod = tvm.relay.transform.FoldConstant()(new_mod)
+
+    print("*****OLDMODEL:")
+    print(mod)
+    print()
+    print("*****NEWMODEL:")
+    print(new_mod)
+
+
 if __name__ == "__main__":
     simple_example()
     rewrite_example()
+    rewrite_deeplab_model()
