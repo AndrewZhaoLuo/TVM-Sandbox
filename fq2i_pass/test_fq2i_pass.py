@@ -35,6 +35,7 @@ with tempfile.NamedTemporaryFile() as f:
 
     # Transform fake quantized sub-graphs to actual integer ops.
     # Should have no effect on graphs without the relevant patterns.
+    mod = relay.transform.InferType()(mod)
     fq2i_mod = relay.transform.FakeQuantizationToInteger()(mod)
 
     breakpoint()
