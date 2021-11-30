@@ -41,7 +41,6 @@ for model_name in os.listdir(MODEL_PATHS):
             # Should have no effect on graphs without the relevant patterns.
             mod = relay.transform.InferType()(mod)
             fq2i_mod = relay.transform.FakeQuantizationToInteger()(mod)
-
             print("Quantized:", file=output_file)
-            print(mod, file=output_file)
+            print(fq2i_mod, file=output_file)
             print()
