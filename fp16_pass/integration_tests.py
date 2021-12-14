@@ -50,7 +50,7 @@ def run_tf_graph(sess, input_data, input_node, output_node):
     return output_data
 
 
-def verify_fp32_fp16_output_close(mod, mod_params, rtol=1e-3, atol=0, run_opt=True):
+def verify_fp32_fp16_output_close(mod, mod_params, rtol=5e-3, atol=1e-3, run_opt=True):
     mod = InferType()(mod)
     result_fp32 = run_module(mod, mod_params)
 
