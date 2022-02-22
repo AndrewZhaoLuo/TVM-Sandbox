@@ -3,12 +3,11 @@ from os import path
 import onnx
 from tvm import relay
 
-MODEL_PATH = "~/Downloads/pytorch_lstm.onnx"
+# SRC: https://github.com/onnx/models/blob/main/vision/classification/densenet-121/README.md
+MODEL_PATH = "models/densenet-3.onnx"
 
 if __name__ == "__main__":
-    model_path = path.join(path.expanduser(MODEL_PATH))
-
-    onnx_model = onnx.load(model_path)
+    onnx_model = onnx.load(MODEL_PATH)
     input_shapes = {}
     input_dtypes = {}
     initializer_names = [n.name for n in onnx_model.graph.initializer]
@@ -28,5 +27,5 @@ if __name__ == "__main__":
     mod, params = relay.frontend.from_onnx(
         onnx_model, shape=input_shapes, freeze_params=True
     )
-    mod = relay.transform.DynamicToStatic()(mod)
-    breakpoint()
+
+    print(mod)
