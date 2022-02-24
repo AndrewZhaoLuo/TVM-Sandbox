@@ -3,6 +3,8 @@
 import numpy as np
 import onnxruntime as ort
 
+import sclo
+
 model_path = "models/resnet18-v1-7.onnx"
 so = ort.SessionOptions()
 so.log_severity_level = 3
