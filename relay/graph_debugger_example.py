@@ -1,14 +1,15 @@
 import json
 
+import onnx
 import tvm
 from tvm import relay
 from tvm.contrib.debugger import debug_executor
 
 target = "llvm"
 
-# Assume you have mod and params
-mod = None
-params = None
+model_path = "models/resnet18-v1-7.onnx"
+onnx_model = onnx.load(model_path)
+mod, params = relay.frontend.from_onnx(onnx_model, freeze_params=True)
 
 
 def run_tvm(lib):
@@ -42,3 +43,5 @@ with open("profiling_data/_tvmdbg_device_CPU_0/output_tensors.params", "rb") as 
 
 with open("profiling_data/_tvmdbg_device_CPU_0/_tvmdbg_graph_dump.json", "r") as f:
     graph = json.load(f)
+
+breakpoint()
