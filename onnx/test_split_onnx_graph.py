@@ -3,15 +3,17 @@
 https://github.com/onnx/onnx/blob/main/docs/IR.md
 """
 
+import os
 from collections import defaultdict, deque
 
-import numpy as np
+import onnxruntime as ort
 
 import onnx.utils
 from onnx import shape_inference
 from onnx.tools import update_model_dims
 
 OP_TYPES_OF_INTEREST = {"Conv", "MatMul"}
+import numpy as np
 
 
 def load_model(model_path, input_shapes=None, output_shapes=None):
@@ -115,7 +117,7 @@ def split_model(onnx_model, op_types_of_interest=OP_TYPES_OF_INTEREST):
     return ret
 
 
-if __name__ == "__main__":
+def extract_model():
     onnx_model = load_model(
         "models/bertsquad-8.onnx",
         {
@@ -126,11 +128,65 @@ if __name__ == "__main__":
         },
         {"unstack:1": [1, 256], "unstack:0": [1, 256], "unique_ids:0": [1]},
     )
+    model_names = []
     model_segments = split_model(onnx_model)
     for i, segment in enumerate(model_segments):
         onnx.save(segment, f"bertsquad-segment{i}.onnx")
+        model_names.append(f"bertsquad-segment{i}.onnx")
+    return model_names
 
-    onnx_model = load_model("models/ssd-10.onnx")
-    model_segments = split_model(onnx_model)
-    for i, segment in enumerate(model_segments):
-        onnx.save(segment, f"ssd-segment{i}.onnx")
+
+def run_segment(onnx_model, input_values):
+    session = ort.InferenceSession(onnx_model.SerializeToString())
+    result = session.run(None, input_values)
+    output_values = {}
+    for i, output_node in enumerate(onnx_model.graph.output):
+        name = output_node.name
+        tensor = result[i]
+        output_values[name] = tensor
+    return output_values
+
+
+if __name__ == "__main__":
+    # extract_model()
+
+    models = os.listdir()
+    models = [m for m in models if "bertsquad-segment" in m]
+    models.sort(key=lambda x: int(x.split("segment")[-1].split(".")[0]))
+
+    print(models)
+
+    first_model = models[0]
+    all_shapes = {
+        "unique_ids_raw_output___9:0": [1],
+        "segment_ids:0": [1, 256],
+        "input_mask:0": [1, 256],
+        "input_ids:0": [1, 256],
+    }
+    all_dtypes = {
+        "unique_ids_raw_output___9:0": "int64",
+        "segment_ids:0": "int64",
+        "input_mask:0": "int64",
+        "input_ids:0": "int64",
+    }
+    input_names = [
+        "unique_ids_raw_output___9:0",
+        "segment_ids:0",
+        "input_mask:0",
+        "input_ids:0",
+    ]
+    tensors = {
+        name: np.zeros(all_shapes[name]).astype(all_dtypes[name])
+        for name in input_names
+    }
+    for model_path in models:
+        print(model_path)
+        onnx_model = load_model(model_path)
+        input_names = [node.name for node in onnx_model.graph.input]
+        input_tensors = {k: tensors[k] for k in input_names}
+        output_tensors = run_segment(onnx_model, input_tensors)
+
+        tensors.update(output_tensors)
+
+    breakpoint()
+    print("result")
