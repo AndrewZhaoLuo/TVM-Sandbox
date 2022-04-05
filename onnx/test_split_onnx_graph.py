@@ -250,10 +250,17 @@ def create_initializer_tensor(
 ) -> onnx.TensorProto:
 
     DTYPE_MAP = {
+        "float16": onnx.TensorProto.FLOAT16,
         "float32": onnx.TensorProto.FLOAT,
         "float64": onnx.TensorProto.DOUBLE,
         "int8": onnx.TensorProto.INT8,
+        "int16": onnx.TensorProto.INT16,
+        "int32": onnx.TensorProto.INT32,
         "int64": onnx.TensorProto.INT64,
+        "uint8": onnx.TensorProto.UINT8,
+        "uint16": onnx.TensorProto.UINT16,
+        "uint32": onnx.TensorProto.UINT32,
+        "uint64": onnx.TensorProto.UINT64,
     }
     # (TensorProto)
     initializer_tensor = helper.make_tensor(
