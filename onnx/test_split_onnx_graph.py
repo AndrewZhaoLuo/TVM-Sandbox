@@ -15,11 +15,12 @@ from six import string_types
 import tvm
 from tvm import relay
 from onnx import helper
+from typing import *
 
 OP_TYPES_OF_INTEREST = {"Conv", "MatMul"}
 
-# These ops add dynamism typically and should be avoided!
-OP_TYPES_IGNORE = {"Reshape"}
+# Map of op names to argument indices which may induce dynamism in model
+DYNAMIC_OPS = {"Reshape": (1,)}
 
 import numpy as np
 
@@ -117,7 +118,12 @@ def update_inputs_outputs_dims(
     return model
 
 
-def load_model(model_path, input_shapes=None, output_shapes=None):
+def load_model(
+    model_path: str,
+    input_shapes: Optional[Dict[str, List]] = None,
+    output_shapes: Optional[Dict[str, List]] = None,
+) -> onnx.ModelProto:
+    """Load the given model, updating shapes as need be."""
     onnx_model = onnx.load(model_path)
 
     if input_shapes is not None and output_shapes is not None:
@@ -132,7 +138,10 @@ def load_model(model_path, input_shapes=None, output_shapes=None):
     return onnx_model
 
 
-def get_node_and_consumer_map(onnx_model):
+def get_node_and_consumer_map(
+    onnx_model: onnx.ModelProto,
+) -> Tuple[Dict[str, onnx.NodeProto], Dict[str, Set[str]]]:
+    """Get a map of node names --> onnx nodes and consumer map."""
     # Map of name of node --> ONNX node
     node_map = {}
 
@@ -147,13 +156,20 @@ def get_node_and_consumer_map(onnx_model):
     return node_map, consumer_map
 
 
-def split_model(
-    onnx_model, op_types_of_interest=OP_TYPES_OF_INTEREST, max_ops_of_interest=1
-):
-    extractor = onnx.utils.Extractor(onnx_model)
-    # Constant tensors
-    default_tensors = {t.name for t in onnx_model.graph.initializer}
+def get_sections(
+    onnx_model: onnx.ModelProto,
+    op_types_of_interest: Set[str],
+    max_ops_of_interest: int,
+) -> List[List[str]]:
+    """Divides up the onnx model graph into subgraphs such that each subgraph will have
+    up to `max_ops_of_interest` number of operations belonging to `op_types_of_interest`
 
+    Each section is non-overlapping except for inputs/outputs. In general the outputs
+    of one graph will be the input to another graph.
+
+    Returns a list of sections, where each section is a list of named nodes which belong
+    to a subgraph.
+    """
     node_map, _ = get_node_and_consumer_map(onnx_model)
 
     # Tuple of input names, output names for extraction
@@ -190,15 +206,28 @@ def split_model(
                     sections.append(cur_section)
                     ops_of_interest = 1
                     cur_section = []
-                    print(len(sections))
 
             cur_section.append(cur_node.name)
 
     if len(cur_section) > 0:
         sections.append(cur_section)
 
+    return sections
+
+
+def extract_sections(
+    extractor: onnx.utils.Extractor,
+    sections: List[List[str]],
+    node_map: Dict[str, onnx.NodeProto],  # map of node name to the nodes
+    default_tensors: Set[str],  # set of names in initializer list of onnx graph
+) -> List[onnx.ModelProto]:
+    """From a list of sections, extracts subgraphs containing those sections
+
+    And returns a corresponding list of model protos which are topographical order
+    w.r.t. their output nodes.
+    """
     ret = []
-    for i, section in enumerate(sections):
+    for section in sections:
         input_nodes = set()
         output_nodes = set()
         for node_name in section:
@@ -212,6 +241,9 @@ def split_model(
 
         input_nodes = input_nodes - common_nodes - default_tensors
         output_nodes = output_nodes - common_nodes - default_tensors
+
+        """
+        # Debug info 
         print("Section:", section)
         print("Inputs:")
         for input_node in input_nodes:
@@ -220,35 +252,32 @@ def split_model(
         for output_node in output_nodes:
             print(f"\t{output_node}")
         print()
+        """
+
         section = extractor.extract_model(input_nodes, output_nodes)
         ret.append(section)
     return ret
 
 
-def extract_model():
-    onnx_model = load_model(
-        "models/bertsquad-8.onnx",
-        {
-            "unique_ids_raw_output___9:0": [1],
-            "segment_ids:0": [1, 256],
-            "input_mask:0": [1, 256],
-            "input_ids:0": [1, 256],
-        },
-        {"unstack:1": [1, 256], "unstack:0": [1, 256], "unique_ids:0": [1]},
-    )
-    model_names = []
-    model_segments = split_model(onnx_model)
-    for i, segment in enumerate(model_segments):
-        onnx.save(segment, f"bertsquad-segment{i}.onnx")
-        model_names.append(f"bertsquad-segment{i}.onnx")
-    return model_names
+def run_model(
+    onnx_model: onnx.ModelProto, input_values: Dict[str, np.ndarray]
+) -> Dict[str, np.ndarray]:
+    session = ort.InferenceSession(onnx_model.SerializeToString())
+    result = session.run(None, input_values)
+
+    output_values = {}
+    for i, output_node in enumerate(onnx_model.graph.output):
+        name = output_node.name
+        tensor = result[i]
+        output_values[name] = tensor
+    return output_values
 
 
 def create_initializer_tensor(
     name: str,
     tensor_array: np.ndarray,
 ) -> onnx.TensorProto:
-
+    """Makes an initizlier proto."""
     DTYPE_MAP = {
         "float16": onnx.TensorProto.FLOAT16,
         "float32": onnx.TensorProto.FLOAT,
@@ -273,15 +302,21 @@ def create_initializer_tensor(
     return initializer_tensor
 
 
-def run_segment(onnx_model, input_values, SPECIAL_OPERATIONS={"Reshape": (1,)}):
+def simplify_model(
+    onnx_model: onnx.ModelProto,
+    input_values: Dict[str, np.ndarray],
+    dynamic_ops: Dict[str, List[int]],
+) -> Tuple[onnx.ModelProto, Dict[str, np.ndarray]]:
+    """Runs the onnx model while also mutating it to make certain dynamic ops non-dynamic."""
     node_map, _ = get_node_and_consumer_map(onnx_model)
 
+    # Get list of inputs which should be frozen (set as constants)
+    # Because they feed into a dynamic op's argument which causes dynamism
+    # TODO: propagate dynamism argument to adjacent nodes
     frozen_input_values = set()
-
-    # Only ops which are near to the thing
     for k, v in node_map.items():
-        if v.op_type in SPECIAL_OPERATIONS.keys():
-            bad_arg_pos = SPECIAL_OPERATIONS[v.op_type]
+        if v.op_type in dynamic_ops.keys():
+            bad_arg_pos = dynamic_ops[v.op_type]
             for arg_pos in bad_arg_pos:
                 input_name = v.input[arg_pos]
                 if input_name in input_values.keys():
@@ -300,23 +335,100 @@ def run_segment(onnx_model, input_values, SPECIAL_OPERATIONS={"Reshape": (1,)}):
                     onnx_model.graph.input.pop(i)
                     break
 
-    # Run onnx session
-    session = ort.InferenceSession(onnx_model.SerializeToString())
-    result = session.run(None, input_values)
-    output_values = {}
-    for i, output_node in enumerate(onnx_model.graph.output):
-        name = output_node.name
-        tensor = result[i]
-        output_values[name] = tensor
+    return onnx_model, input_values
+
+
+def split_model(
+    onnx_model: onnx.ModelProto,
+    input_tensors: Dict[str, np.ndarray],
+    op_types_of_interest: Set[str] = OP_TYPES_OF_INTEREST,
+    max_ops_of_interest: int = 1,
+    dynamic_ops: Dict[str, List[int]] = DYNAMIC_OPS,
+) -> List[onnx.ModelProto]:
+    extractor = onnx.utils.Extractor(onnx_model)
+    # Constant tensors
+    default_tensors = {t.name for t in onnx_model.graph.initializer}
+
+    node_map, _ = get_node_and_consumer_map(onnx_model)
+
+    # Tuple of input names, output names for extraction
+    sections = get_sections(onnx_model, op_types_of_interest, max_ops_of_interest)
+    print(f"Extracted {len(sections)} sections!")
+
+    onnx_subgraphs = extract_sections(extractor, sections, node_map, default_tensors)
+    print(f"Extracted {len(onnx_subgraphs)} subgraphs!")
+
+    # Cache tensors we might need them later
+    tensors = dict(input_tensors)
+    result = []
+
+    # Run the model to infer shape and set certain inputs to dynamics ops as constant
+    for i, onnx_sub_model in enumerate(onnx_subgraphs):
+        print(f"Simplifying model {i + 1} / {len(onnx_subgraphs)}")
+        input_names = [node.name for node in onnx_sub_model.graph.input]
+        input_tensors = {k: tensors[k] for k in input_names}
+        onnx_sub_model, input_tensors = simplify_model(
+            onnx_sub_model, input_tensors, dynamic_ops
+        )
+        output_tensors = run_model(onnx_sub_model, input_tensors)
+        tensors.update(output_tensors)
+        result.append(onnx_sub_model)
+    return result
+
+
+def extract_model():
+    MODEL_PATH = "models/bertsquad-8.onnx"
+    INPUT_SHAPES = {
+        "unique_ids_raw_output___9:0": [1],
+        "segment_ids:0": [1, 256],
+        "input_mask:0": [1, 256],
+        "input_ids:0": [1, 256],
+    }
+    INPUT_DTYPES = {
+        "unique_ids_raw_output___9:0": "int64",
+        "segment_ids:0": "int64",
+        "input_mask:0": "int64",
+        "input_ids:0": "int64",
+    }
+    OUTPUT_SHAPES = {"unstack:1": [1, 256], "unstack:0": [1, 256], "unique_ids:0": [1]}
+
+    onnx_model = load_model(MODEL_PATH, INPUT_SHAPES, OUTPUT_SHAPES)
+    model_names = []
+    input_tensors = {
+        name: np.zeros(INPUT_SHAPES[name]).astype(INPUT_DTYPES[name])
+        for name in INPUT_SHAPES.keys()
+    }
+    onnx_sub_models = split_model(onnx_model, input_tensors)
+    for i, segment in enumerate(onnx_sub_models):
+        onnx.save(segment, f"bertsquad-segment{i}.onnx")
+        model_names.append(f"bertsquad-segment{i}.onnx")
+    return model_names
+
+
+def compare_onnxrt_to_tvm(onnx_model, input_values):
+    output_tensors = run_model(onnx_model, input_values)
+    ordered_tensors = [output_tensors[node.name] for node in onnx_model.graph.output]
 
     # Run TVM session
-    mod, params = relay.frontend.from_onnx(
+    mod, _ = relay.frontend.from_onnx(
         onnx_model,
         shape={k: v.shape for k, v in input_values.items()},
         dtype={k: str(v.dtype) for k, v in input_values.items()},
         freeze_params=True,
     )
-    return output_values
+
+    vm_exe = relay.create_executor("vm", mod=mod)
+    tvm_result = vm_exe.evaluate()(**input_values)
+    if isinstance(tvm_result, tvm.runtime.container.ADT):
+        tvm_result = [r.asnumpy() for r in tvm_result]
+    else:
+        tvm_result = [tvm_result.asnumpy()]
+
+    assert len(tvm_result) == len(ordered_tensors)
+    for tvm_result, onnx_result in zip(tvm_result, ordered_tensors):
+        np.testing.assert_allclose(tvm_result, onnx_result, rtol=0.05, atol=1e-3)
+
+    return output_tensors
 
 
 if __name__ == "__main__":
@@ -325,9 +437,6 @@ if __name__ == "__main__":
     models = os.listdir()
     models = [m for m in models if "bertsquad-segment" in m]
     models.sort(key=lambda x: int(x.split("segment")[-1].split(".")[0]))
-
-    print(models)
-
     first_model = models[0]
     all_shapes = {
         "unique_ids_raw_output___9:0": [1],
@@ -356,9 +465,6 @@ if __name__ == "__main__":
         onnx_model = load_model(model_path)
         input_names = [node.name for node in onnx_model.graph.input]
         input_tensors = {k: tensors[k] for k in input_names}
-        output_tensors = run_segment(onnx_model, input_tensors)
+        output_tensors = compare_onnxrt_to_tvm(onnx_model, input_tensors)
 
         tensors.update(output_tensors)
-
-    breakpoint()
-    print("result")
