@@ -376,7 +376,7 @@ def split_model(
     return result
 
 
-def extract_model():
+def extract_model(op_types_of_interest=OP_TYPES_OF_INTEREST):
     MODEL_PATH = "models/bertsquad-8.onnx"
     INPUT_SHAPES = {
         "unique_ids_raw_output___9:0": [1],
@@ -398,10 +398,17 @@ def extract_model():
         name: np.zeros(INPUT_SHAPES[name]).astype(INPUT_DTYPES[name])
         for name in INPUT_SHAPES.keys()
     }
-    onnx_sub_models = split_model(onnx_model, input_tensors)
+    onnx_sub_models = split_model(
+        onnx_model, input_tensors, op_types_of_interest=op_types_of_interest
+    )
     for i, segment in enumerate(onnx_sub_models):
-        onnx.save(segment, f"bertsquad-segment{i}.onnx")
-        model_names.append(f"bertsquad-segment{i}.onnx")
+        main_ops = [
+            node.op_type
+            for node in segment.graph.node
+            if node.op_type in op_types_of_interest
+        ]
+        onnx.save(segment, f"bertsquad-segment-{i}-{''.join(main_ops)}.onnx")
+        model_names.append(f"bertsquad-segment-{i}-{''.join(main_ops)}.onnx")
     return model_names
 
 
@@ -432,11 +439,11 @@ def compare_onnxrt_to_tvm(onnx_model, input_values):
 
 
 if __name__ == "__main__":
-    # extract_model()
+    extract_model()
 
     models = os.listdir()
     models = [m for m in models if "bertsquad-segment" in m]
-    models.sort(key=lambda x: int(x.split("segment")[-1].split(".")[0]))
+    models.sort(key=lambda x: int(x.split("-")[2].split(".")[0]))
     first_model = models[0]
     all_shapes = {
         "unique_ids_raw_output___9:0": [1],
