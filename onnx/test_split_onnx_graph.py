@@ -129,7 +129,7 @@ def load_model(
     if input_shapes is not None and output_shapes is not None:
         # This doesn't work too well with some models. Future Idea: run model to get shapes
         # Set shapes so each component is able to be calculated with real shapes
-        onnx_model = update_model_dims.update_inputs_outputs_dims(
+        onnx_model = update_inputs_outputs_dims(
             onnx_model,
             input_shapes,
             output_shapes,
@@ -376,42 +376,6 @@ def split_model(
     return result
 
 
-def extract_model(op_types_of_interest=OP_TYPES_OF_INTEREST):
-    MODEL_PATH = "models/bertsquad-8.onnx"
-    INPUT_SHAPES = {
-        "unique_ids_raw_output___9:0": [1],
-        "segment_ids:0": [1, 256],
-        "input_mask:0": [1, 256],
-        "input_ids:0": [1, 256],
-    }
-    INPUT_DTYPES = {
-        "unique_ids_raw_output___9:0": "int64",
-        "segment_ids:0": "int64",
-        "input_mask:0": "int64",
-        "input_ids:0": "int64",
-    }
-    OUTPUT_SHAPES = {"unstack:1": [1, 256], "unstack:0": [1, 256], "unique_ids:0": [1]}
-
-    onnx_model = load_model(MODEL_PATH, INPUT_SHAPES, OUTPUT_SHAPES)
-    model_names = []
-    input_tensors = {
-        name: np.zeros(INPUT_SHAPES[name]).astype(INPUT_DTYPES[name])
-        for name in INPUT_SHAPES.keys()
-    }
-    onnx_sub_models = split_model(
-        onnx_model, input_tensors, op_types_of_interest=op_types_of_interest
-    )
-    for i, segment in enumerate(onnx_sub_models):
-        main_ops = [
-            node.op_type
-            for node in segment.graph.node
-            if node.op_type in op_types_of_interest
-        ]
-        onnx.save(segment, f"bertsquad-segment-{i}-{''.join(main_ops)}.onnx")
-        model_names.append(f"bertsquad-segment-{i}-{''.join(main_ops)}.onnx")
-    return model_names
-
-
 def compare_onnxrt_to_tvm(onnx_model, input_values):
     output_tensors = run_model(onnx_model, input_values)
     ordered_tensors = [output_tensors[node.name] for node in onnx_model.graph.output]
@@ -423,6 +387,12 @@ def compare_onnxrt_to_tvm(onnx_model, input_values):
         dtype={k: str(v.dtype) for k, v in input_values.items()},
         freeze_params=True,
     )
+    format_str = str(mod)
+    lines = format_str.split("\n")
+    for i in range(len(lines)):
+        lines[i] = "\t" + lines[i]
+    format_str = "\n".join(lines)
+    print(format_str)
 
     vm_exe = relay.create_executor("vm", mod=mod)
     tvm_result = vm_exe.evaluate()(**input_values)
@@ -438,20 +408,49 @@ def compare_onnxrt_to_tvm(onnx_model, input_values):
     return output_tensors
 
 
-if __name__ == "__main__":
-    extract_model()
+def extract_model(
+    model_path: str,
+    input_shapes: Dict[str, List[int]],
+    input_dtypes: Dict[str, str],
+    output_shapes: Dict[str, List[int]],
+    op_types_of_interest: Set[str] = OP_TYPES_OF_INTEREST,
+    dir: str = "onnx_segments",
+):
+    os.makedirs(dir, exist_ok=True)
+    onnx_model = load_model(model_path, input_shapes, output_shapes)
+    model_names = []
+    input_tensors = {
+        name: np.zeros(input_shapes[name]).astype(input_dtypes[name])
+        for name in input_shapes.keys()
+    }
+    onnx_sub_models = split_model(
+        onnx_model, input_tensors, op_types_of_interest=op_types_of_interest
+    )
 
-    models = os.listdir()
-    models = [m for m in models if "bertsquad-segment" in m]
-    models.sort(key=lambda x: int(x.split("-")[2].split(".")[0]))
-    first_model = models[0]
-    all_shapes = {
+    base_file_name = os.path.basename(model_path).split(".onnx")[0]
+
+    for i, segment in enumerate(onnx_sub_models):
+        main_ops = [
+            node.op_type
+            for node in segment.graph.node
+            if node.op_type in op_types_of_interest
+        ]
+        output_path = os.path.join(
+            dir, f"{base_file_name}-segment-{i}-{''.join(main_ops)}.onnx"
+        )
+        onnx.save(segment, output_path)
+        model_names.append(output_path)
+    return model_names
+
+
+def try_bertsquad():
+    input_shapes = {
         "unique_ids_raw_output___9:0": [1],
         "segment_ids:0": [1, 256],
         "input_mask:0": [1, 256],
         "input_ids:0": [1, 256],
     }
-    all_dtypes = {
+    input_dtypes = {
         "unique_ids_raw_output___9:0": "int64",
         "segment_ids:0": "int64",
         "input_mask:0": "int64",
@@ -463,8 +462,11 @@ if __name__ == "__main__":
         "input_mask:0",
         "input_ids:0",
     ]
+    models = extract_model(
+        "models/bertsquad-8.onnx", input_shapes, input_dtypes, output_shapes={}
+    )
     tensors = {
-        name: np.zeros(all_shapes[name]).astype(all_dtypes[name])
+        name: np.zeros(input_shapes[name]).astype(input_dtypes[name])
         for name in input_names
     }
     for model_path in models:
@@ -475,3 +477,29 @@ if __name__ == "__main__":
         output_tensors = compare_onnxrt_to_tvm(onnx_model, input_tensors)
 
         tensors.update(output_tensors)
+
+
+def try_ssd():
+    input_shapes = {"image": [1, 3, 1200, 1200]}
+    input_dtypes = {"image": "float32"}
+    input_names = ["image"]
+    models = extract_model(
+        "models/ssd-10.onnx", input_shapes, input_dtypes, output_shapes={}
+    )
+    tensors = {
+        name: np.zeros(input_shapes[name]).astype(input_dtypes[name])
+        for name in input_names
+    }
+    for model_path in models:
+        print(model_path)
+        onnx_model = load_model(model_path)
+        input_names = [node.name for node in onnx_model.graph.input]
+        input_tensors = {k: tensors[k] for k in input_names}
+        output_tensors = compare_onnxrt_to_tvm(onnx_model, input_tensors)
+
+        tensors.update(output_tensors)
+
+
+if __name__ == "__main__":
+    # try_bertsquad()
+    try_ssd()
