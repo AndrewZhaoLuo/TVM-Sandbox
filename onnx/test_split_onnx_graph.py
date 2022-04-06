@@ -19,7 +19,18 @@ from tvm import relay
 from onnx import helper
 from typing import *
 
-OP_TYPES_OF_INTEREST = {"Conv", "MatMul"}
+OP_TYPES_OF_INTEREST = {
+    "Conv",
+    "MatMul",
+    "Gemm",
+    "ConvInteger",
+    "ConvTranspose",
+    "MatMulInteger",
+    "QLinearConv",
+    "QLinearMatMul",
+    "RNN",
+    "LSTM",
+}
 
 # Map of op names to argument indices which may induce dynamism in model
 DYNAMIC_OPS = {"Reshape": (1,)}
@@ -472,6 +483,27 @@ def extract_model(
     return model_names
 
 
+def run_examination(
+    input_shapes: Dict[str, List[int]],
+    input_dtypes: Dict[str, str],
+    model_path: str,
+):
+    input_names = list(input_shapes.keys())
+    models = extract_model(model_path, input_shapes, input_dtypes, output_shapes={})
+    tensors = {
+        name: np.zeros(input_shapes[name]).astype(input_dtypes[name])
+        for name in input_names
+    }
+    for model_path in models:
+        print(model_path)
+        onnx_model = load_model(model_path)
+        input_names = [node.name for node in onnx_model.graph.input]
+        input_tensors = {k: tensors[k] for k in input_names}
+        output_tensors = compare_onnxrt_to_tvm(onnx_model, input_tensors)
+
+        tensors.update(output_tensors)
+
+
 def try_bertsquad():
     input_shapes = {
         "unique_ids_raw_output___9:0": [1],
@@ -500,28 +532,20 @@ def try_yolov2():
     run_examination(input_shapes, input_dtypes, "models/yolov2-coco-9.onnx")
 
 
-def run_examination(
-    input_shapes: Dict[str, List[int]],
-    input_dtypes: Dict[str, str],
-    model_path: str,
-):
-    input_names = list(input_shapes.keys())
-    models = extract_model(model_path, input_shapes, input_dtypes, output_shapes={})
-    tensors = {
-        name: np.zeros(input_shapes[name]).astype(input_dtypes[name])
-        for name in input_names
-    }
-    for model_path in models:
-        print(model_path)
-        onnx_model = load_model(model_path)
-        input_names = [node.name for node in onnx_model.graph.input]
-        input_tensors = {k: tensors[k] for k in input_names}
-        output_tensors = compare_onnxrt_to_tvm(onnx_model, input_tensors)
+def try_shufflenet():
+    input_shapes = {"gpu_0/data_0": [1, 3, 224, 224]}
+    input_dtypes = {"gpu_0/data_0": "float32"}
+    run_examination(input_shapes, input_dtypes, "models/shufflenet-9.onnx")
 
-        tensors.update(output_tensors)
 
+def try_resnet():
+    input_shapes = {"data": [1, 3, 224, 224]}
+    input_dtypes = {"data": "float32"}
+    run_examination(input_shapes, input_dtypes, "models/resnet50-v1-7.onnx")
 
 if __name__ == "__main__":
-    try_bertsquad()
-    try_ssd()
-    try_yolov2()
+    # try_bertsquad()
+    # try_ssd()
+    # try_yolov2()
+    # try_shufflenet()
+    try_resnet()
