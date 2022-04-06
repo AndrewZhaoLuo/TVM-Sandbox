@@ -3,8 +3,10 @@
 https://github.com/onnx/onnx/blob/main/docs/IR.md
 """
 
+import glob
 import os
 from collections import defaultdict, deque
+from more_itertools import consumer
 
 import onnxruntime as ort
 
@@ -118,6 +120,15 @@ def update_inputs_outputs_dims(
     return model
 
 
+def set_unique_names(onnx_model):
+    i = 0
+    for node in onnx_model.graph.node:
+        if node.name == "":  # no name, create a unique one
+            node.name = f"assigned_name_{str(node.op_type)}_{i}"
+            i += 1
+    return onnx_model
+
+
 def load_model(
     model_path: str,
     input_shapes: Optional[Dict[str, List]] = None,
@@ -125,6 +136,7 @@ def load_model(
 ) -> onnx.ModelProto:
     """Load the given model, updating shapes as need be."""
     onnx_model = onnx.load(model_path)
+    onnx_model = set_unique_names(onnx_model)
 
     if input_shapes is not None and output_shapes is not None:
         # This doesn't work too well with some models. Future Idea: run model to get shapes
@@ -149,6 +161,7 @@ def get_node_and_consumer_map(
     consumer_map = defaultdict(set)
 
     for node in onnx_model.graph.node:
+        assert node.name not in node_map
         node_map[node.name] = node
         for input_name in node.input:
             consumer_map[input_name].add(node.name)
@@ -220,6 +233,7 @@ def extract_sections(
     sections: List[List[str]],
     node_map: Dict[str, onnx.NodeProto],  # map of node name to the nodes
     default_tensors: Set[str],  # set of names in initializer list of onnx graph
+    consumer_graph: Dict[str, Set[str]],
 ) -> List[onnx.ModelProto]:
     """From a list of sections, extracts subgraphs containing those sections
 
@@ -237,10 +251,23 @@ def extract_sections(
             for node_output in node.output:
                 output_nodes.add(node_output)
 
+        # If all nodes are consumed in this seciton
         common_nodes = input_nodes.intersection(output_nodes)
+
+        # The set of all output whose connections are not strictly in this section
+        # (We want these to represent true topology of graph)
+        loose_output_nodes = set()
+        for node in common_nodes.intersection(output_nodes):
+            # check if all consumers of this node are in the graph
+            global_consumers = consumer_graph[node]
+            all_nodes_in_graph = set(section).union(input_nodes).union(output_nodes)
+            consumers_in_graph = global_consumers.intersection(all_nodes_in_graph)
+            if len(consumers_in_graph) != len(global_consumers):
+                loose_output_nodes.add(node)
 
         input_nodes = input_nodes - common_nodes - default_tensors
         output_nodes = output_nodes - common_nodes - default_tensors
+        output_nodes = output_nodes.union(loose_output_nodes)
 
         """
         # Debug info 
@@ -349,13 +376,15 @@ def split_model(
     # Constant tensors
     default_tensors = {t.name for t in onnx_model.graph.initializer}
 
-    node_map, _ = get_node_and_consumer_map(onnx_model)
+    node_map, consumer_graph = get_node_and_consumer_map(onnx_model)
 
     # Tuple of input names, output names for extraction
     sections = get_sections(onnx_model, op_types_of_interest, max_ops_of_interest)
     print(f"Extracted {len(sections)} sections!")
 
-    onnx_subgraphs = extract_sections(extractor, sections, node_map, default_tensors)
+    onnx_subgraphs = extract_sections(
+        extractor, sections, node_map, default_tensors, consumer_graph
+    )
     print(f"Extracted {len(onnx_subgraphs)} subgraphs!")
 
     # Cache tensors we might need them later
@@ -456,36 +485,28 @@ def try_bertsquad():
         "input_mask:0": "int64",
         "input_ids:0": "int64",
     }
-    input_names = [
-        "unique_ids_raw_output___9:0",
-        "segment_ids:0",
-        "input_mask:0",
-        "input_ids:0",
-    ]
-    models = extract_model(
-        "models/bertsquad-8.onnx", input_shapes, input_dtypes, output_shapes={}
-    )
-    tensors = {
-        name: np.zeros(input_shapes[name]).astype(input_dtypes[name])
-        for name in input_names
-    }
-    for model_path in models:
-        print(model_path)
-        onnx_model = load_model(model_path)
-        input_names = [node.name for node in onnx_model.graph.input]
-        input_tensors = {k: tensors[k] for k in input_names}
-        output_tensors = compare_onnxrt_to_tvm(onnx_model, input_tensors)
-
-        tensors.update(output_tensors)
+    run_examination(input_shapes, input_dtypes, "models/bertsquad-8.onnx")
 
 
 def try_ssd():
     input_shapes = {"image": [1, 3, 1200, 1200]}
     input_dtypes = {"image": "float32"}
-    input_names = ["image"]
-    models = extract_model(
-        "models/ssd-10.onnx", input_shapes, input_dtypes, output_shapes={}
-    )
+    run_examination(input_shapes, input_dtypes, "models/ssd-10.onnx")
+
+
+def try_yolov2():
+    input_shapes = {"input.1": [1, 3, 416, 416]}
+    input_dtypes = {"input.1": "float32"}
+    run_examination(input_shapes, input_dtypes, "models/yolov2-coco-9.onnx")
+
+
+def run_examination(
+    input_shapes: Dict[str, List[int]],
+    input_dtypes: Dict[str, str],
+    model_path: str,
+):
+    input_names = list(input_shapes.keys())
+    models = extract_model(model_path, input_shapes, input_dtypes, output_shapes={})
     tensors = {
         name: np.zeros(input_shapes[name]).astype(input_dtypes[name])
         for name in input_names
@@ -501,5 +522,6 @@ def try_ssd():
 
 
 if __name__ == "__main__":
-    # try_bertsquad()
+    try_bertsquad()
     try_ssd()
+    try_yolov2()
