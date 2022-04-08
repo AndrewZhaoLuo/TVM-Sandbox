@@ -215,11 +215,18 @@ class SubgraphExtractor:
                 possible_outputs.append(node_output)
                 all_edges.add(node_output)
 
+        # Prevent duplicate inputs
+        inputs_added = set()
         # Here we can determine the inputs and outputs of our graph
         # inputs are names with no producers and not constants (initializers)
         # outputs are names where local consumers != global consumers OR were outputs in the original graph
         for name in possible_inputs:
-            if name not in local_edge_producers and name not in self.initializer_map:
+            if (
+                name not in local_edge_producers
+                and name not in self.initializer_map
+                and name not in inputs_added
+            ):
+                inputs_added.add(name)
                 vinfo = ValueInfoProto()
                 vinfo.CopyFrom(self.value_info_map[name])
                 inputs.append(vinfo)
