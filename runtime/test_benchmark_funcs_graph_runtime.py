@@ -3,14 +3,11 @@
 Benchmarks individual nodes in the graph runtime.
 """
 
-from tvm import relay
+import numpy as np
 import onnx
-
-import numpy as np
-
 import tvm
+from tvm import relay
 from tvm.contrib.debugger import debug_executor
-import numpy as np
 
 onnx_model = onnx.load("models/shufflenet-9.onnx")
 
@@ -51,10 +48,8 @@ for i, node in enumerate(rt_mod.debug_datum.get_graph_nodes()):
         input_shapes.append(node_name_to_out_shapes[input_node_name])
     input_shapes = str(input_shapes)
 
-    result_arr = np.array(result).flatten()
-    result_avg = np.average(result_arr).item()
-    result_std = np.std(result_arr).item()
     print(
         f"{i: <4} {node_name: <60} out: {output_shape: <20} in: {input_shapes: <60}"
-        f"-- {result_avg} ({result_std})"
+        f"-- {result.mean:10.9f} ({result.std:10.9f}). Median: ({result.median:10.9f}), "
+        f"Range: [{result.min:10.9f}, {result.max:10.9f}]"
     )
