@@ -54,22 +54,29 @@ def verify_fp32_fp16_output_close(mod, mod_params, rtol=5e-3, atol=1e-3, run_opt
     mod = InferType()(mod)
     result_fp32 = run_module(mod, mod_params)
 
+    passes = []
     if run_opt:
-        # mod = tvm.relay.transform.FastMath()(mod)
-        mod = tvm.relay.transform.EliminateCommonSubexpr()(mod)
-        mod = tvm.relay.transform.FoldConstant()(mod)
-        mod = tvm.relay.transform.CombineParallelBatchMatmul()(mod)
-        mod = tvm.relay.transform.FoldConstant()(mod)
+        passes += [
+            tvm.relay.transform.EliminateCommonSubexpr(),
+            tvm.relay.transform.FoldConstant(),
+            tvm.relay.transform.CombineParallelBatchMatmul(),
+            tvm.relay.transform.FoldConstant(),
+        ]
 
-    mod = ToMixedPrecision()(mod)
+    passes += [ToMixedPrecision()]
 
     if run_opt:
         # run one more pass to clean up new subgraph
-        mod = tvm.relay.transform.FastMath()(mod)
-        mod = tvm.relay.transform.EliminateCommonSubexpr()(mod)
-        mod = tvm.relay.transform.FoldConstant()(mod)
-        mod = tvm.relay.transform.CombineParallelBatchMatmul()(mod)
-        mod = tvm.relay.transform.FoldConstant()(mod)
+        passes += [
+            tvm.relay.transform.FastMath(),
+            tvm.relay.transform.EliminateCommonSubexpr(),
+            tvm.relay.transform.FoldConstant(),
+            tvm.relay.transform.CombineParallelBatchMatmul(),
+            tvm.relay.transform.FoldConstant(),
+        ]
+
+    sequential_passes = tvm.transform.Sequential(passes)
+    mod = sequential_passes(mod)
     result_fp16 = run_module(mod, mod_params)
 
     # Ensure the results are close
