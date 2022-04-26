@@ -3,6 +3,7 @@
 from typing import Dict
 
 import numpy as np
+import onnxruntime.tools.symbolic_shape_infer as ort_symbolic_shape_infer
 
 import onnx
 import onnx.checker
@@ -78,14 +79,45 @@ class OnnxInputShapeChanger:
         return onnx_model
 
 
+def run_model(
+    onnx_model: onnx.ModelProto,
+    input_values: Dict[str, np.ndarray],
+    verbose=False,
+) -> Dict[str, np.ndarray]:
+    import onnxruntime as ort
+
+    """Run the given model and return the resulting tensors."""
+    if not verbose:
+        so = ort.SessionOptions()
+        so.log_severity_level = 3
+    session = ort.InferenceSession(onnx_model.SerializeToString(), sess_options=so)
+    result = session.run(None, input_values)
+
+    output_values = {}
+    for i, output_node in enumerate(onnx_model.graph.output):
+        name = output_node.name
+        tensor = result[i]
+        output_values[name] = tensor
+    return output_values
+
+
 if __name__ == "__main__":
-    onnx_model = onnx.load("models/mobilenetv2-7-2.onnx")
+    onnx_model = onnx.load("models/yolov3.onnx")
 
     # Map of onnx input nodes --> tensor to trace/set model with
-    input_dict = {"input": np.zeros([1, 3, 32, 32], dtype="float32")}
+    input_dict = {
+        "input_1": np.zeros([1, 3, 192, 192], dtype="float32"),
+        "image_shape": np.array([192, 192]).reshape([1, 2]).astype("float32"),
+    }
     rewriter = OnnxInputShapeChanger(onnx_model)
     new_model = rewriter.rewrite(input_dict)
 
+    # Run the below if using onnx-tensorrt
+    # new_model = ort_symbolic_shape_infer.SymbolicShapeInference.infer_shapes(
+    #     new_model, auto_merge=True, guess_output_rank=True
+    # )
+
+    run_model(new_model, input_dict)
     # Model may not be totally valid esp. with dynamic ops but should be fine to run/ingest
     # onnx.checker.check_model(new_model, full_check=True)
     onnx.save(new_model, "result.onnx")
