@@ -18,31 +18,37 @@ def graph_optimize(tvmc_model, run_fp16_pass, run_other_opts, fast_math=True):
     # Weird functions we don't use are in there it's weird
     mod = tvm.IRModule.from_expr(mod["main"])
 
+    passes = []
+
     if run_other_opts:
-        mod = tvm.relay.transform.FastMath()(mod) if fast_math else mod
-        mod = tvm.relay.transform.EliminateCommonSubexpr()(mod)
-        BindPass = tvm.relay.transform.function_pass(
-            lambda fn, new_mod, ctx: tvm.relay.build_module.bind_params_by_name(
-                fn, params
-            ),
-            opt_level=1,
+        passes.append(tvm.relay.transform.EliminateCommonSubexpr()(mod))
+        passes.append(
+            tvm.relay.transform.function_pass(
+                lambda fn, new_mod, ctx: tvm.relay.build_module.bind_params_by_name(
+                    fn, params
+                ),
+                opt_level=1,
+            )
         )
-        mod = BindPass(mod)
-        mod = tvm.relay.transform.FoldConstant()(mod)
-        mod = tvm.relay.transform.CombineParallelBatchMatmul()(mod)
-        mod = tvm.relay.transform.FoldConstant()(mod)
+        passes.append(tvm.relay.transform.FoldConstant()(mod))
+        passes.append(tvm.relay.transform.CombineParallelBatchMatmul()(mod))
+        passes.append(tvm.relay.transform.FoldConstant()(mod))
 
     if run_fp16_pass:
-        mod = InferType()(mod)
-        mod = ToMixedPrecision()(mod)
+        passes.append(InferType())
+        passes.append(ToMixedPrecision())
 
     if run_other_opts and run_fp16_pass:
         # run one more pass to clean up new subgraph
-        mod = tvm.relay.transform.EliminateCommonSubexpr()(mod)
-        mod = tvm.relay.transform.FoldConstant()(mod)
-        mod = tvm.relay.transform.CombineParallelBatchMatmul()(mod)
-        mod = tvm.relay.transform.FoldConstant()(mod)
-        mod = tvm.relay.transform.FastMath()(mod) if fast_math else mod
+        passes.append(tvm.relay.transform.EliminateCommonSubexpr())
+        passes.append(tvm.relay.transform.FoldConstant())
+        passes.append(tvm.relay.transform.CombineParallelBatchMatmul())
+        passes.append(tvm.relay.transform.FoldConstant())
+
+        if fast_math:
+            passes.append(tvm.relay.transform.FastMath())
+
+    mod = tvm.transform.Sequential(passes)(mod)
 
     return TVMCModel(mod, params)
 
