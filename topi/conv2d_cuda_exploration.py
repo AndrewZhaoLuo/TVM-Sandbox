@@ -1,10 +1,10 @@
 # Printing and making sense of tvmscript and convs in CUDA
-import tvm.topi.nn as nn_te
+import tvm
 import tvm.te as te
+import tvm.topi.cuda as cuda_topi
+import tvm.topi.nn as nn_te
 from tvm import IRModule
-
 from tvm import tir as T
-
 from tvm.script import tir as T
 
 if __name__ == "__main__":
@@ -15,9 +15,12 @@ if __name__ == "__main__":
     output = nn_te.conv2d(
         image, filter, strides=2, padding=3, dilation=1, layout="NCHW"
     )
-    func = te.create_prim_func([image, filter, output])
+
+    # Schedule it
+    output_sch = cuda_topi.schedule_conv2d_nchw(output)
 
     # Prim func is closer to C code
+    func = te.create_prim_func([image, filter, output_sch])
     print(func)
 
     ir_module_from_te = IRModule({"main": func})
