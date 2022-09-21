@@ -12,14 +12,13 @@ ZP = relay.const(1, dtype="int32")
 def relay_special_residual_layer_fake_quantized(
     input_var: relay.Var,
 ):
-    q_input = relay.qnn.op.quantize(input_var, SF, ZP)
-    qdq_input = relay.qnn.op.dequantize(q_input, SF, ZP)
+    qdq_input = relay.qnn.op.dequantize(input_var, SF, ZP)
 
     # Potentially expensive op!
     expensive_mean = relay.mean(qdq_input, axis=-1, keepdims=True)
 
     # To preserve shape
-    diamond_mul = relay.multiply(expensive_mean, qdq_input)
+    diamond_mul = relay.subtract(expensive_mean, qdq_input)
     sqrt = relay.sqrt(diamond_mul)
 
     q_diamond = relay.qnn.op.quantize(sqrt, SF, ZP)
@@ -29,6 +28,7 @@ def relay_special_residual_layer_fake_quantized(
     # a handle into the quantized version of the previous nodes...
     # This eventually duplicates the expensive operations in the diamond
     evil_add = relay.add(qdq_diamond, sqrt)
+    evil_add = relay.qnn.op.quantize(evil_add, SF, ZP)
     return evil_add
 
 
@@ -46,8 +46,9 @@ def expected_result_quantized(input_var: relay.Var):
 
 def generate_evil_model(shape=[1, 512, 512], layers=10) -> IRModule:
     input_var = relay.var("input_var", shape=shape)
+    input_var_quantized = relay.qnn.op.quantize(input_var, SF, ZP)
 
-    cur_last_expr = input_var
+    cur_last_expr = input_var_quantized
     for _ in range(layers):
         cur_last_expr = relay_special_residual_layer_fake_quantized(cur_last_expr)
 
@@ -84,6 +85,7 @@ def run_fq2i(mod: IRModule) -> IRModule:
 
     # Fold constants after FQ2I becuase some weights are stored in FP32.
     passes.append(relay.transform.FoldConstant())
+    passes.append(relay.transform.EliminateCommonSubexpr())
     seq = tvm.ir.transform.Sequential(passes)
     return seq(mod)
 
