@@ -43,10 +43,10 @@ if __name__ == "__main__":
     reshaped0 = relay.reshape(input_var, [128, 2, 2, 2])
 
     # 0 --> copy dimension from original shape
-    reshaped1 = relay.reshape(input_var, [0, 2, 0, 0])
+    reshaped1 = relay.reverse_reshape(input_var, [0, 2, 0, 0])
 
     # -1 --> infer the rest of dimensions from given info
-    reshaped2 = relay.reshape(input_var, [-1, 2, 2, 2])
+    reshaped2 = relay.reverse_reshape(input_var, [-1, 2, 2, 2])
 
     # -2 --> copy remainder dimensions from original shape
     reshaped3 = relay.reshape(input_var, [128, 2, -2])
