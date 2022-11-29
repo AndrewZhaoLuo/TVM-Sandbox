@@ -58,7 +58,7 @@ def benchmark(
 
     disabled_passes_tir_read = ["tir.CommonSubexprElimTir", "tir.UnrollLoop"]
     # Build once to get TIR (with simplifications if needed)
-    with database, tvm.transform.PassContext(
+    with database, target, tvm.transform.PassContext(
         config={
             "relay.backend.use_meta_schedule": True,
             "relay.backend.use_meta_schedule_dispatch": target.kind.name != "cuda",
