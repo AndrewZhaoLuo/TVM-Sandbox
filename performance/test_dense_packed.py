@@ -43,6 +43,29 @@ def tune(mod, params, target: tvm.target.Target, max_trials_global=128, work_dir
     return database
 
 
+def get_runtime(mod, target, params, database, use_graph=False):
+    with database, tvm.transform.PassContext(
+        config={
+            "relay.backend.use_meta_schedule": True,
+            "relay.backend.use_meta_schedule_dispatch": target.kind.name != "cuda",
+            "relay.FuseOps.max_depth": 30,
+        },
+        opt_level=3,
+    ):
+        if use_graph:
+            lib = relay.build(mod, target)
+            runtime = graph_executor.GraphModule(lib["default"](dev))
+        else:
+            exe = vm.compile(
+                mod,
+                target,
+                params=params,
+            )
+            dev = tvm.device("cuda" if "cuda" in str(target) else "cpu", 0)
+            runtime = vm_rt.VirtualMachine(exe, dev)
+    return runtime, exe, dev
+
+
 def benchmark(
     mod,
     params,
@@ -74,26 +97,7 @@ def benchmark(
             params=params,
         )
 
-    # Here we build with all stuff
-    with database, tvm.transform.PassContext(
-        config={
-            "relay.backend.use_meta_schedule": True,
-            "relay.backend.use_meta_schedule_dispatch": target.kind.name != "cuda",
-            "relay.FuseOps.max_depth": 30,
-        },
-        opt_level=3,
-    ):
-        if use_graph:
-            lib = relay.build(mod, target)
-            runtime = graph_executor.GraphModule(lib["default"](dev))
-        else:
-            exe = vm.compile(
-                mod,
-                target,
-                params=params,
-            )
-            dev = tvm.device("cuda" if "cuda" in str(target) else "cpu", 0)
-            runtime = vm_rt.VirtualMachine(exe, dev)
+    runtime, exe, dev = get_runtime(mod, target, params, database, use_graph=use_graph)
 
     results = runtime.benchmark(
         tvm.cpu(),
@@ -123,10 +127,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", type=str, required=True)
 
+    np_input = np.random.randint(-100, 100, size=(512, 768))
+    np_weights = np.random.randn(3072, 768)
+
     args = parser.parse_args()
     target = tvm.target.Target(args.target)
     input_var = relay.var("input", shape=[512, 768])
-    weight_const = relay.const(np.random.randn(3072, 768))
+    weight_const = relay.const(np_weights)
 
     results = relay.nn.dense(input_var, weight_const)
 
@@ -139,3 +146,9 @@ if __name__ == "__main__":
 
     input_dict = {"input": np.random.randn(512, 768).astype("float32")}
     benchmark(mod, {}, db, target, input_dict)
+
+    runtime, exe, dev = get_runtime(mod, target, {}, db, use_graph=False)
+
+    breakpoint()
+
+    print("yay!")
